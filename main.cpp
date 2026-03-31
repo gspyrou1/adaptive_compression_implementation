@@ -211,8 +211,7 @@ struct AdaptiveDictionaryEncoder {
 					diffDict.push_back(v);
 				}
 			}
-            
-            std::sort(diffDict.begin(), diffDict.end());
+			// diffDict is already sorted: built by filtering the sorted localDict in order.
 
 			const uint32_t diffCardinality = static_cast<uint32_t>(cumulativeDictionary.size() + diffDict.size());
 			const uint8_t diffOffsetWidth = width_for_cardinality(diffCardinality);
@@ -234,8 +233,9 @@ struct AdaptiveDictionaryEncoder {
 				} else if (diffOffsetWidth == currentOffsetWidth) {
 					chooseLocal = false;
 				} else {
+					// diffCount == 0 makes the entire first term zero regardless of diffAvg.
 					const double diffAvg = diffCount == 0
-											   ? static_cast<double>(diffDictBytes)
+											   ? 0.0
 											   : static_cast<double>(diffDictionaryBytesTotal) / static_cast<double>(diffCount);
 					const double lhs = static_cast<double>(diffCount) *
 										   (static_cast<double>(diffOffsetBytes) - diffAvg) -
