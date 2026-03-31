@@ -1,5 +1,7 @@
 #include "ac_serial.h"
 
+#include <stdexcept>
+
 namespace ac {
 
 void write_u8(std::ostream& os, uint8_t v) {
@@ -62,6 +64,93 @@ void write_column(std::ostream& os, const EncodedColumn& col) {
             write_offset(os, offset, page.offsetWidth);
         }
     }
+}
+
+// ----- Read (decompression path) -----------------------------------------
+
+uint8_t read_u8(std::istream& is) {
+    unsigned char c = 0;
+    is.read(reinterpret_cast<char*>(&c), 1);
+    if (!is) throw std::runtime_error("Unexpected end of compressed file");
+    return static_cast<uint8_t>(c);
+}
+
+uint32_t read_u32(std::istream& is) {
+    // Little-endian: least significant byte first.
+    uint32_t v = 0;
+    for (int i = 0; i < 4; ++i) {
+        v |= static_cast<uint32_t>(read_u8(is)) << (i * 8);
+    }
+    return v;
+}
+
+std::string read_string(std::istream& is) {
+    const uint32_t len = read_u32(is);
+    std::string s(static_cast<size_t>(len), '\0');
+    if (len > 0) {
+        is.read(&s[0], static_cast<std::streamsize>(len));
+        if (!is) throw std::runtime_error("Unexpected end of compressed file");
+    }
+    return s;
+}
+
+uint32_t read_offset(std::istream& is, uint8_t width) {
+    // Same little-endian layout as write_offset.
+    uint32_t v = 0;
+    for (uint8_t i = 0; i < width; ++i) {
+        v |= static_cast<uint32_t>(read_u8(is)) << (i * 8);
+    }
+    return v;
+}
+
+EncodedColumn read_column(std::istream& is) {
+    EncodedColumn col;
+    col.columnIndex1Based = read_u32(is);
+    col.isString          = (read_u8(is) == 1);
+    col.dictionaryEnabled = (read_u8(is) == 1);
+
+    if (!col.dictionaryEnabled) {
+        const uint32_t count = read_u32(is);
+        col.rawValues.resize(static_cast<size_t>(count));
+        for (uint32_t i = 0; i < count; ++i) {
+            col.rawValues[i] = read_string(is);
+        }
+        return col;
+    }
+
+    // kDefaultPageSize is stored for reference but not needed during decoding.
+    read_u32(is);
+
+    const uint32_t pageCount = read_u32(is);
+    col.pages.resize(static_cast<size_t>(pageCount));
+
+    for (uint32_t p = 0; p < pageCount; ++p) {
+        EncodedPage& page = col.pages[p];
+
+        // isLocal: 0 = local, 1 = differential (mirrors write_column).
+        page.isLocal     = (read_u8(is) == 0);
+        page.offsetWidth = read_u8(is);
+        page.rowCount    = read_u32(is);
+
+        page.pageMin = read_string(is);
+        page.pageMax = read_string(is);
+        page.diffMin = read_string(is);
+        page.diffMax = read_string(is);
+
+        const uint32_t dictSize = read_u32(is);
+        page.dictionary.resize(static_cast<size_t>(dictSize));
+        for (uint32_t i = 0; i < dictSize; ++i) {
+            page.dictionary[i] = read_string(is);
+        }
+
+        const uint32_t offsetCount = read_u32(is);
+        page.offsets.resize(static_cast<size_t>(offsetCount));
+        for (uint32_t i = 0; i < offsetCount; ++i) {
+            page.offsets[i] = read_offset(is, page.offsetWidth);
+        }
+    }
+
+    return col;
 }
 
 } // namespace ac

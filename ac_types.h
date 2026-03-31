@@ -51,4 +51,10 @@ struct EncodedColumn {
     std::vector<EncodedPage>  pages;
 };
 
+// Result of decompressing one column: the original string values in row order.
+struct DecodedColumn {
+    uint32_t                 columnIndex1Based = 0;
+    std::vector<std::string> values;
+};
+
 } // namespace ac
