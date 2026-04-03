@@ -41,7 +41,8 @@ std::vector<std::string> parse_csv_line(const std::string& line) {
     return out;
 }
 
-std::vector<std::vector<std::string>> read_csv(const std::string& path) {
+std::vector<std::vector<std::string>> read_csv(const std::string& path,
+                                               size_t max_rows) {
     std::ifstream input(path);
     if (!input) {
         throw std::runtime_error("Failed to open CSV file: " + path);
@@ -52,6 +53,8 @@ std::vector<std::vector<std::string>> read_csv(const std::string& path) {
     size_t expectedCols = 0;
 
     while (std::getline(input, line)) {
+        if (max_rows > 0 && rows.size() >= max_rows) break;
+
         std::vector<std::string> row = parse_csv_line(line);
 
         if (expectedCols == 0) {

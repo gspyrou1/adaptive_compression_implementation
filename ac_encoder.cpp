@@ -41,8 +41,9 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
                                          totalRows);
         const size_t pageRows = pageEnd - pageStart;
 
-        std::vector<std::string> page(columnValues.begin() + static_cast<long>(pageStart),
-                                      columnValues.begin() + static_cast<long>(pageEnd));
+        // C1: no page copy -- use iterators into columnValues directly.
+        auto rangeBegin = columnValues.cbegin() + static_cast<long>(pageStart);
+        auto rangeEnd   = columnValues.cbegin() + static_cast<long>(pageEnd);
 
         // ------------------------------------------------------------------
         // Step 1: Cardinality check.
@@ -50,7 +51,7 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         // encoding will not help. Reset the sequence state so this page
         // becomes the start of a new local sequence.
         // ------------------------------------------------------------------
-        std::unordered_set<std::string> pageSet(page.begin(), page.end());
+        std::unordered_set<std::string> pageSet(rangeBegin, rangeEnd);
         const double distinctRatio = static_cast<double>(pageSet.size())
                                      / static_cast<double>(pageRows);
 
@@ -63,31 +64,21 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         }
 
         // ------------------------------------------------------------------
-        // Step 2: Build the local dictionary (sorted distinct values) and
-        // pre-compute local offsets in case we choose local encoding.
+        // Step 2: Build the local dictionary (sorted distinct values).
+        // C2: localIndex and localOffsets are deferred to the if (chooseLocal)
+        // branch -- on differential pages (the common case) this work is skipped.
         // ------------------------------------------------------------------
         std::vector<std::string> localDict(pageSet.begin(), pageSet.end());
         std::sort(localDict.begin(), localDict.end());
 
-        std::unordered_map<std::string, uint32_t> localIndex;
-        localIndex.reserve(localDict.size() * 2 + 1);
-        for (uint32_t i = 0; i < static_cast<uint32_t>(localDict.size()); ++i) {
-            localIndex[localDict[i]] = i;
-        }
-
-        std::vector<uint32_t> localOffsets;
-        localOffsets.reserve(pageRows);
-        for (const std::string& v : page) {
-            localOffsets.push_back(localIndex[v]);
-        }
-
         // ------------------------------------------------------------------
         // Step 3: Build the differential dictionary (new values only) and
         // count how many rows in this page repeat values from prior pages.
+        // C1: iterate the range, not a copied page vector.
         // ------------------------------------------------------------------
         uint32_t repeatingRows = 0;
-        for (const std::string& v : page) {
-            if (cumulativeIndex.count(v) > 0) ++repeatingRows;
+        for (auto it = rangeBegin; it != rangeEnd; ++it) {
+            if (cumulativeIndex.count(*it) > 0) ++repeatingRows;
         }
         const double repeatRatio = (pageRows == 0)
             ? 0.0
@@ -166,11 +157,26 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         EncodedPage encoded;
         encoded.rowCount = static_cast<uint32_t>(pageRows);
 
-        std::pair<std::string, std::string> pm = min_max(page);
-        encoded.pageMin = pm.first;
-        encoded.pageMax = pm.second;
+        // C1: pageMin/pageMax via minmax_element on the range (no page vector).
+        auto mm = std::minmax_element(rangeBegin, rangeEnd);
+        encoded.pageMin = *mm.first;
+        encoded.pageMax = *mm.second;
 
         if (chooseLocal) {
+            // C2: build localIndex and localOffsets here, only when needed.
+            // C1: localOffsets loop uses the range, not a page vector.
+            std::unordered_map<std::string, uint32_t> localIndex;
+            localIndex.reserve(localDict.size() * 2 + 1);
+            for (uint32_t i = 0; i < static_cast<uint32_t>(localDict.size()); ++i) {
+                localIndex[localDict[i]] = i;
+            }
+
+            std::vector<uint32_t> localOffsets;
+            localOffsets.reserve(pageRows);
+            for (auto it = rangeBegin; it != rangeEnd; ++it) {
+                localOffsets.push_back(localIndex[*it]);
+            }
+
             encoded.isLocal     = true;
             encoded.offsetWidth = localOffsetWidth;
             encoded.dictionary  = localDict;
@@ -210,8 +216,9 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
 
             std::vector<uint32_t> diffOffsets;
             diffOffsets.reserve(pageRows);
-            for (const std::string& v : page) {
-                diffOffsets.push_back(cumulativeIndex[v]);
+            // C1: iterate the range, not a page vector.
+            for (auto it = rangeBegin; it != rangeEnd; ++it) {
+                diffOffsets.push_back(cumulativeIndex[*it]);
             }
             encoded.offsets = diffOffsets;
 

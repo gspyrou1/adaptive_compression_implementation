@@ -13,8 +13,10 @@ namespace ac {
 // Handles double-quoted fields and escaped quotes ("").
 std::vector<std::string> parse_csv_line(const std::string& line);
 
-// Reads an entire CSV file and returns all rows as a 2-D vector.
+// Reads a CSV file and returns all rows as a 2-D vector.
 // Every row is padded or trimmed to match the column count of the first row.
-std::vector<std::vector<std::string>> read_csv(const std::string& path);
+// If max_rows > 0, reading stops after that many rows (useful for very large files).
+std::vector<std::vector<std::string>> read_csv(const std::string& path,
+                                               size_t max_rows = 0);
 
 } // namespace ac

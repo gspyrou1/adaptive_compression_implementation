@@ -19,6 +19,12 @@ namespace ac {
 //
 // In both cases, every row offset then indexes directly into the cumulative
 // dictionary to retrieve the original string value.
+//
+// D1: cumulativeDict stores pointers into page.dictionary instead of string
+// copies. The pages are owned by the EncodedColumn which outlives this call,
+// so the pointers remain valid throughout. This eliminates all intermediate
+// string allocations; the only copies are the ones into result.values, which
+// are required to materialise the output.
 DecodedColumn decompress_column(const EncodedColumn& col) {
     DecodedColumn result;
     result.columnIndex1Based = col.columnIndex1Based;
@@ -36,19 +42,25 @@ DecodedColumn decompress_column(const EncodedColumn& col) {
     }
     result.values.reserve(totalRows);
 
-    std::vector<std::string> cumulativeDict;
+    // D1: pointer vector instead of string vector -- no intermediate string copies.
+    std::vector<const std::string*> cumulativeDict;
 
     for (const EncodedPage& page : col.pages) {
 
         if (page.isLocal) {
             // Local page: replace the cumulative dictionary entirely.
             // This page is self-contained, just like an I-frame in video.
-            cumulativeDict = page.dictionary;
+            // D1: store pointers into page.dictionary, not copies.
+            cumulativeDict.clear();
+            for (const std::string& v : page.dictionary) {
+                cumulativeDict.push_back(&v);
+            }
         } else {
             // Differential page: only new values are stored.
             // Append them to rebuild the cumulative dictionary up to this point.
+            // D1: store pointers into page.dictionary, not copies.
             for (const std::string& v : page.dictionary) {
-                cumulativeDict.push_back(v);
+                cumulativeDict.push_back(&v);
             }
         }
 
@@ -57,7 +69,8 @@ DecodedColumn decompress_column(const EncodedColumn& col) {
             if (offset >= cumulativeDict.size()) {
                 throw std::runtime_error("Corrupt data: offset out of range");
             }
-            result.values.push_back(cumulativeDict[offset]);
+            // Dereference the pointer; this is the one required string copy per row.
+            result.values.push_back(*cumulativeDict[offset]);
         }
     }
 
