@@ -1,6 +1,8 @@
 #include "ac_csv.h"
 #include "ac_decompressor.h"
 #include "ac_encoder.h"
+#include "ac_random_access.h"
+#include "ac_scanner.h"
 #include "ac_serial.h"
 #include "ac_types.h"
 #include "ac_utils.h"
@@ -41,28 +43,25 @@ static double compute_median(std::vector<double>& v) {
 // Metrics helpers
 // ---------------------------------------------------------------------------
 
-// Sum of raw string byte lengths in a column (not CSV framing, not offsets).
 static uint64_t compute_raw_bytes(const std::vector<std::string>& values) {
     uint64_t total = 0;
     for (const std::string& s : values) total += s.size();
     return total;
 }
 
-// Serialise an EncodedColumn to measure its compressed byte size.
 static uint64_t compute_compressed_bytes(const ac::EncodedColumn& col) {
     std::ostringstream oss;
     ac::write_column(oss, col);
     return static_cast<uint64_t>(oss.str().size());
 }
 
-// Per-column structural metrics extracted from an EncodedColumn.
 struct PageStats {
     uint32_t totalPages  = 0;
     uint32_t localPages  = 0;
     uint32_t diffPages   = 0;
     double   avgDictSize = 0.0;
     uint64_t compBytes   = 0;
-    double   compRatio   = 0.0;   // raw_bytes / comp_bytes
+    double   compRatio   = 0.0;
 };
 
 static PageStats compute_page_stats(const ac::EncodedColumn& col,
@@ -97,7 +96,7 @@ static PageStats compute_page_stats(const ac::EncodedColumn& col,
 }
 
 // ---------------------------------------------------------------------------
-// Timed encode / decode
+// Timed encode / decode / scan
 // ---------------------------------------------------------------------------
 
 static std::pair<double, ac::EncodedColumn> time_encode(
@@ -106,10 +105,7 @@ static std::pair<double, ac::EncodedColumn> time_encode(
         std::function<ac::EncodedColumn(uint32_t,
                                         const std::vector<std::string>&)> fn) {
     ac::EncodedColumn result;
-
-    for (int i = 0; i < N_WARMUP; ++i) {
-        result = fn(colIdx, values);
-    }
+    for (int i = 0; i < N_WARMUP; ++i) result = fn(colIdx, values);
 
     std::vector<double> times;
     times.reserve(static_cast<size_t>(N_RUNS));
@@ -119,7 +115,6 @@ static std::pair<double, ac::EncodedColumn> time_encode(
         auto t1 = Clock::now();
         times.push_back(elapsed_ms(t0, t1));
     }
-
     return std::make_pair(compute_median(times), result);
 }
 
@@ -136,8 +131,25 @@ static double time_decode(
         auto t1 = Clock::now();
         times.push_back(elapsed_ms(t0, t1));
     }
-
     return compute_median(times);
+}
+
+// Runs filtered_scan N_RUNS times and returns (median_ms, stats_from_last_run).
+static std::pair<double, ac::ScanStats> time_scan(
+        const ac::EncodedColumn& col,
+        const std::string& target) {
+    ac::ScanStats stats;
+    for (int i = 0; i < N_WARMUP; ++i) ac::filtered_scan(col, target, stats);
+
+    std::vector<double> times;
+    times.reserve(static_cast<size_t>(N_RUNS));
+    for (int i = 0; i < N_RUNS; ++i) {
+        auto t0 = Clock::now();
+        ac::filtered_scan(col, target, stats);
+        auto t1 = Clock::now();
+        times.push_back(elapsed_ms(t0, t1));
+    }
+    return std::make_pair(compute_median(times), stats);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,6 +159,31 @@ static double time_decode(
 static void print_line(char c = '-', int width = 96) {
     for (int i = 0; i < width; ++i) std::putchar(c);
     std::putchar('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Pick sample scan targets
+//
+// We pick 3 values spread across the column: first-quarter, mid, last-quarter.
+// These are guaranteed to exist and give a variety of selectivities.
+// ---------------------------------------------------------------------------
+
+static std::vector<std::string> pick_scan_targets(
+        const std::vector<std::string>& values) {
+    const size_t n = values.size();
+    std::vector<std::string> targets;
+    targets.push_back(values[n / 4]);
+    targets.push_back(values[n / 2]);
+    targets.push_back(values[n * 3 / 4]);
+
+    // Deduplicate while preserving order.
+    std::vector<std::string> unique;
+    for (const std::string& t : targets) {
+        bool found = false;
+        for (const std::string& u : unique) { if (u == t) { found = true; break; } }
+        if (!found) unique.push_back(t);
+    }
+    return unique;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,9 +219,9 @@ static void bench_column(uint32_t colIdx,
             return enc.encode(idx, v);
         });
 
-    const double   encMs    = encRes.first;
-    const ac::EncodedColumn& encoded = encRes.second;
-    const PageStats ps       = compute_page_stats(encoded, rawBytes);
+    const double            encMs   = encRes.first;
+    const ac::EncodedColumn encoded  = encRes.second;
+    const PageStats         ps       = compute_page_stats(encoded, rawBytes);
 
     const double rowsPerSecEnc = static_cast<double>(totalRows) / (encMs / 1000.0);
     const double mbPerSecEnc   = static_cast<double>(rawBytes)  / (encMs / 1000.0)
@@ -206,9 +243,7 @@ static void bench_column(uint32_t colIdx,
     // Decompression / full scan (paper section 3.2.2)
     // ------------------------------------------------------------------
     const double decMs = time_decode(encoded,
-        [](const ac::EncodedColumn& c) {
-            return ac::decompress_column(c);
-        });
+        [](const ac::EncodedColumn& c) { return ac::decompress_column(c); });
 
     const double rowsPerSecDec = static_cast<double>(totalRows) / (decMs / 1000.0);
     const double mbPerSecDec   = static_cast<double>(rawBytes)  / (decMs / 1000.0)
@@ -221,17 +256,92 @@ static void bench_column(uint32_t colIdx,
     printf("  %10.1f %14.0f %9.1f\n", decMs, rowsPerSecDec, mbPerSecDec);
 
     // ------------------------------------------------------------------
-    // Summary
-    // NOTE: The paper (section 4.1) also measures filtered scan time and
-    // page omittance counts (Table 1, Table 2, Table 3). These require
-    // the filtered scan path (section 3.2.3) which is not yet implemented.
-    // When added, this section should print:
-    //   - total filtered scan time (ms)
-    //   - I/O time (ms)
-    //   - pages omitted by zone maps
-    //   - pages omitted by differential min/max
-    //   - offset-scan steps skipped by dict lookup
+    // Filtered scan (paper section 3.2.3)
+    //
+    // For each sample target we report:
+    //   - scan time (ms)
+    //   - rows matched and selectivity
+    //   - pages skipped by zone map / by dict miss / actually scanned
+    //
+    // This corresponds to the breakdown in paper Tables 2 and 3.
     // ------------------------------------------------------------------
+    std::vector<std::string> targets = pick_scan_targets(values);
+
+    printf("\n  FILTERED SCAN  (%d runs, warm cache)\n", N_RUNS);
+    print_line();
+    printf("  %-30s %10s %10s %8s   %6s %9s %8s\n",
+           "Target (truncated)", "Time(ms)", "Matched", "Sel%%",
+           "ZMSkip", "DictSkip", "Scanned");
+    print_line();
+
+    for (const std::string& target : targets) {
+        auto scanRes = time_scan(encoded, target);
+        const double       scanMs = scanRes.first;
+        const ac::ScanStats& st   = scanRes.second;
+
+        const double sel = (totalRows > 0)
+            ? 100.0 * st.rowsMatched / static_cast<double>(totalRows) : 0.0;
+
+        // Truncate the target string for display.
+        std::string display = target.size() > 28
+            ? target.substr(0, 25) + "..."
+            : target;
+
+        printf("  %-30s %10.2f %10u %7.3f%%   %6u %9u %8u\n",
+               display.c_str(), scanMs,
+               st.rowsMatched, sel,
+               st.pagesSkippedZoneMap,
+               st.pagesSkippedDictMiss,
+               st.pagesScanned);
+    }
+
+    // ------------------------------------------------------------------
+    // Random access (paper section 3.2.5, Figure 6)
+    //
+    // Pick N_RANDOM_ROWS row indices spread across the column.  For each,
+    // time a single random_access() call and report the average.  This
+    // mirrors the paper's experiment of 10 random point queries.
+    // ------------------------------------------------------------------
+    static const int N_RANDOM_ROWS = 10;
+
+    // Evenly spread row indices across the column.
+    std::vector<uint32_t> rowIndices;
+    for (int i = 0; i < N_RANDOM_ROWS; ++i) {
+        rowIndices.push_back(static_cast<uint32_t>(
+            static_cast<uint64_t>(i + 1) * totalRows / (N_RANDOM_ROWS + 1)));
+    }
+
+    // Warm up.
+    for (uint32_t idx : rowIndices) ac::random_access(encoded, idx);
+
+    // Timed runs: time each individual access, collect all samples.
+    std::vector<double> accessTimes;
+    accessTimes.reserve(static_cast<size_t>(N_RUNS) * rowIndices.size());
+    for (int run = 0; run < N_RUNS; ++run) {
+        for (uint32_t idx : rowIndices) {
+            auto t0 = Clock::now();
+            ac::random_access(encoded, idx);
+            auto t1 = Clock::now();
+            accessTimes.push_back(elapsed_ms(t0, t1));
+        }
+    }
+
+    double sumMs = 0.0;
+    double minMs = accessTimes[0];
+    double maxMs = accessTimes[0];
+    for (double t : accessTimes) {
+        sumMs += t;
+        if (t < minMs) minMs = t;
+        if (t > maxMs) maxMs = t;
+    }
+    const double avgMs = sumMs / static_cast<double>(accessTimes.size());
+
+    printf("\n  RANDOM ACCESS  (%d queries x %d runs)\n", N_RANDOM_ROWS, N_RUNS);
+    print_line();
+    printf("  %12s %12s %12s\n", "Avg(ms)", "Min(ms)", "Max(ms)");
+    print_line();
+    printf("  %12.4f %12.4f %12.4f\n", avgMs, minMs, maxMs);
+
     printf("\n  Compressed: %.2f MB  |  Ratio: %.2fx  |  Pages: %u local, %u diff\n\n",
            static_cast<double>(ps.compBytes) / (1024.0 * 1024.0),
            ps.compRatio, ps.localPages, ps.diffPages);
