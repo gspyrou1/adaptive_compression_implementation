@@ -39,6 +39,12 @@ struct EncodedPage {
     std::string pageMax;   // max value in this page (used as a zone map)
     std::string diffMin;   // min of newly added values (tighter filter for differential pages)
     std::string diffMax;   // max of newly added values
+
+    // Distance (in pages) back to the local page that started this sequence.
+    // Always 0 for local pages. For differential pages: 1 for the first diff
+    // after a local, 2 for the second, etc. Enables O(sequence_length) random
+    // access without scanning from the beginning of the column.
+    uint32_t diffDepth = 0;
 };
 
 // All compressed pages for one column, plus bookkeeping metadata.

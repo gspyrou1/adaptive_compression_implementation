@@ -162,6 +162,8 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         encoded.pageMin = *mm.first;
         encoded.pageMax = *mm.second;
 
+        encoded.diffDepth = chooseLocal ? 0 : (diffCount + 1);
+
         if (chooseLocal) {
             // C2: build localIndex and localOffsets here, only when needed.
             // C1: localOffsets loop uses the range, not a page vector.

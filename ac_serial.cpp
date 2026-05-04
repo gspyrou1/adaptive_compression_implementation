@@ -48,6 +48,7 @@ void write_column(std::ostream& os, const EncodedColumn& col) {
         write_u8 (os, page.isLocal ? 0 : 1);
         write_u8 (os, page.offsetWidth);
         write_u32(os, page.rowCount);
+        write_u32(os, page.diffDepth);
 
         write_string(os, page.pageMin);
         write_string(os, page.pageMax);
@@ -131,6 +132,7 @@ EncodedColumn read_column(std::istream& is) {
         page.isLocal     = (read_u8(is) == 0);
         page.offsetWidth = read_u8(is);
         page.rowCount    = read_u32(is);
+        page.diffDepth   = read_u32(is);
 
         page.pageMin = read_string(is);
         page.pageMax = read_string(is);
