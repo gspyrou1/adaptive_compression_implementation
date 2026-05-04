@@ -1,4 +1,5 @@
 #include "ac_encoder.h"
+#include "ac_bloom.h"
 #include "ac_utils.h"
 
 #include <algorithm>
@@ -31,6 +32,14 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
     uint8_t  currentOffsetWidth       = 1;
     uint32_t diffCount                = 0;  // differential pages in current sequence
     uint64_t diffDictionaryBytesTotal = 0;  // total dict bytes across those diff pages
+
+    // Bloom filter over the local dictionary that started the current sequence.
+    // Built (or rebuilt) every time we commit to a local page.  Used in Rule 2
+    // to check whether the current page's values still overlap enough with the
+    // sequence-start dictionary before deciding to reset.  The filter's false-
+    // positive rate (10 %) means it slightly over-estimates overlap, making the
+    // algorithm conservative about breaking sequences unnecessarily.
+    BloomFilter sequenceStartFilter;
     // ----------------------------------------------------------------------
 
     const size_t totalRows = columnValues.size();
@@ -41,7 +50,6 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
                                          totalRows);
         const size_t pageRows = pageEnd - pageStart;
 
-        // C1: no page copy -- use iterators into columnValues directly.
         auto rangeBegin = columnValues.cbegin() + static_cast<long>(pageStart);
         auto rangeEnd   = columnValues.cbegin() + static_cast<long>(pageEnd);
 
@@ -65,7 +73,7 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
 
         // ------------------------------------------------------------------
         // Step 2: Build the local dictionary (sorted distinct values).
-        // C2: localIndex and localOffsets are deferred to the if (chooseLocal)
+        // localIndex and localOffsets are deferred to the if (chooseLocal)
         // branch -- on differential pages (the common case) this work is skipped.
         // ------------------------------------------------------------------
         std::vector<std::string> localDict(pageSet.begin(), pageSet.end());
@@ -74,7 +82,6 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         // ------------------------------------------------------------------
         // Step 3: Build the differential dictionary (new values only) and
         // count how many rows in this page repeat values from prior pages.
-        // C1: iterate the range, not a copied page vector.
         // ------------------------------------------------------------------
         uint32_t repeatingRows = 0;
         for (auto it = rangeBegin; it != rangeEnd; ++it) {
@@ -126,8 +133,26 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
 
         if (!chooseLocal) {
             if (repeatRatio < kMinCrossPageRepeatRatio) {
-                // Rule 2
-                chooseLocal = true;
+                // Rule 2: low exact repetition -- lean toward local.
+                // Before committing to a reset, consult the bloom filter of the
+                // sequence-start local dictionary.  The filter's false-positive
+                // rate means it over-estimates overlap slightly, so if it still
+                // reports enough coverage we keep the sequence going.  This
+                // avoids unnecessary resets when a page temporarily dips below
+                // the threshold while values from the sequence-start dict are
+                // still present.
+                if (!sequenceStartFilter.empty()) {
+                    uint32_t bloomMatches = 0;
+                    for (auto it = rangeBegin; it != rangeEnd; ++it) {
+                        if (sequenceStartFilter.mightContain(*it)) ++bloomMatches;
+                    }
+                    const double bloomRatio =
+                        static_cast<double>(bloomMatches)
+                        / static_cast<double>(pageRows);
+                    chooseLocal = (bloomRatio < kMinCrossPageRepeatRatio);
+                } else {
+                    chooseLocal = true;
+                }
             } else if (diffOffsetWidth == currentOffsetWidth) {
                 // Rule 3 -- no width increase, always differential
                 chooseLocal = false;
@@ -157,7 +182,6 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         EncodedPage encoded;
         encoded.rowCount = static_cast<uint32_t>(pageRows);
 
-        // C1: pageMin/pageMax via minmax_element on the range (no page vector).
         auto mm = std::minmax_element(rangeBegin, rangeEnd);
         encoded.pageMin = *mm.first;
         encoded.pageMax = *mm.second;
@@ -165,8 +189,6 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         encoded.diffDepth = chooseLocal ? 0 : (diffCount + 1);
 
         if (chooseLocal) {
-            // C2: build localIndex and localOffsets here, only when needed.
-            // C1: localOffsets loop uses the range, not a page vector.
             std::unordered_map<std::string, uint32_t> localIndex;
             localIndex.reserve(localDict.size() * 2 + 1);
             for (uint32_t i = 0; i < static_cast<uint32_t>(localDict.size()); ++i) {
@@ -189,6 +211,12 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
             encoded.diffMax = dm.second;
 
             // This local page becomes the new base of the sequence.
+            // Rebuild the bloom filter for the new sequence-start dictionary.
+            sequenceStartFilter = BloomFilter(static_cast<uint32_t>(localDict.size()));
+            for (const std::string& v : localDict) {
+                sequenceStartFilter.insert(v);
+            }
+
             cumulativeDictionary = localDict;
             cumulativeIndex.clear();
             cumulativeIndex.reserve(cumulativeDictionary.size() * 2 + 1);
@@ -218,7 +246,6 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
 
             std::vector<uint32_t> diffOffsets;
             diffOffsets.reserve(pageRows);
-            // C1: iterate the range, not a page vector.
             for (auto it = rangeBegin; it != rangeEnd; ++it) {
                 diffOffsets.push_back(cumulativeIndex[*it]);
             }

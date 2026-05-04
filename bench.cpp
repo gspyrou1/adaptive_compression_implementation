@@ -5,7 +5,6 @@
 #include "ac_scanner.h"
 #include "ac_serial.h"
 #include "ac_types.h"
-#include "ac_utils.h"
 
 #include <algorithm>
 #include <chrono>

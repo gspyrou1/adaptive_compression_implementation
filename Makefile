@@ -1,10 +1,10 @@
 CXX      = g++
 CXXFLAGS = -std=c++14 -Wall -Wextra -O2
 
-# Shared object files (used by both binaries and any future benchmark binary).
+# Shared object files used by compress and decompress.
 SHARED_OBJS = ac_utils.o ac_csv.o \
-              ac_encoder.o ac_encoder_variants.o \
-              ac_decompressor.o ac_decompressor_variants.o \
+              ac_encoder.o ac_bloom.o \
+              ac_decompressor.o \
               ac_serial.o
 
 all: compress decompress bench
@@ -15,25 +15,26 @@ compress: $(SHARED_OBJS) main.o
 decompress: $(SHARED_OBJS) main_decompress.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-bench: ac_utils.o ac_csv.o ac_encoder.o ac_decompressor.o ac_random_access.o ac_scanner.o ac_serial.o bench.o
+bench: ac_utils.o ac_csv.o ac_encoder.o ac_bloom.o ac_decompressor.o ac_random_access.o ac_scanner.o ac_serial.o bench.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
 %.o: %.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(SHARED_OBJS) main.o main_decompress.o bench.o compress decompress bench
+	rm -f $(SHARED_OBJS) ac_random_access.o ac_scanner.o \
+	      main.o main_decompress.o bench.o \
+	      compress decompress bench
 
 # Explicit header dependencies so make rebuilds the right objects on header changes.
-ac_utils.o:                 ac_utils.cpp                 ac_utils.h                ac_types.h
-ac_csv.o:                   ac_csv.cpp                   ac_csv.h
-ac_encoder.o:               ac_encoder.cpp               ac_encoder.h              ac_types.h ac_utils.h
-ac_encoder_variants.o:      ac_encoder_variants.cpp      ac_encoder_variants.h     ac_types.h ac_utils.h
-ac_decompressor.o:          ac_decompressor.cpp          ac_decompressor.h         ac_types.h
-ac_decompressor_variants.o: ac_decompressor_variants.cpp ac_decompressor_variants.h ac_types.h
-ac_serial.o:                ac_serial.cpp                ac_serial.h               ac_types.h
-main.o:                     main.cpp                     ac_csv.h ac_encoder.h ac_serial.h ac_types.h
-main_decompress.o:          main_decompress.cpp          ac_decompressor.h ac_serial.h ac_types.h
-ac_random_access.o:         ac_random_access.cpp         ac_random_access.h        ac_types.h
-ac_scanner.o:               ac_scanner.cpp               ac_scanner.h              ac_types.h
-bench.o:                    bench.cpp                    ac_csv.h ac_encoder.h ac_decompressor.h ac_random_access.h ac_scanner.h ac_serial.h ac_types.h ac_utils.h
+ac_utils.o:          ac_utils.cpp          ac_utils.h                ac_types.h
+ac_csv.o:            ac_csv.cpp            ac_csv.h
+ac_encoder.o:        ac_encoder.cpp        ac_encoder.h              ac_types.h ac_utils.h ac_bloom.h
+ac_bloom.o:          ac_bloom.cpp          ac_bloom.h
+ac_decompressor.o:   ac_decompressor.cpp   ac_decompressor.h         ac_types.h
+ac_serial.o:         ac_serial.cpp         ac_serial.h               ac_types.h
+ac_random_access.o:  ac_random_access.cpp  ac_random_access.h        ac_types.h
+ac_scanner.o:        ac_scanner.cpp        ac_scanner.h              ac_types.h ac_random_access.h
+main.o:              main.cpp              ac_csv.h ac_encoder.h ac_serial.h ac_types.h
+main_decompress.o:   main_decompress.cpp   ac_decompressor.h ac_serial.h ac_types.h
+bench.o:             bench.cpp             ac_csv.h ac_encoder.h ac_decompressor.h ac_random_access.h ac_scanner.h ac_serial.h ac_types.h

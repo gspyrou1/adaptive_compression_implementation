@@ -1,4 +1,5 @@
 #include "ac_scanner.h"
+#include "ac_random_access.h"
 
 #include <algorithm>
 
@@ -138,6 +139,13 @@ std::vector<uint32_t> filtered_scan(const EncodedColumn& col,
 
     stats.rowsMatched = static_cast<uint32_t>(result.size());
     return result;
+}
+
+std::vector<std::string> filtered_scan_random_access(const EncodedColumn& predicateCol,
+                                                      const std::string& target,
+                                                      const EncodedColumn& payloadCol) {
+    const std::vector<uint32_t> matchingRows = filtered_scan(predicateCol, target);
+    return batch_random_access(payloadCol, matchingRows);
 }
 
 } // namespace ac

@@ -1,6 +1,7 @@
 #include "ac_random_access.h"
 
 #include <stdexcept>
+#include <vector>
 
 namespace ac {
 
@@ -73,6 +74,78 @@ std::string random_access(const EncodedColumn& col, uint32_t rowIndex) {
         throw std::runtime_error("Corrupt data: offset out of range");
     }
     return cumulativeDict[offset];
+}
+
+// Batch random access (§3.2.4).
+//
+// Strategy:
+//   Walk the column's pages sequentially, maintaining the cumulative dictionary
+//   incrementally (same as full decompression).  For each page, binary-search
+//   the sorted rowIndices to find the subset that falls within that page's row
+//   range, then resolve each one from the already-built cumulative dictionary.
+//
+//   Cost: O(total_pages + total_indices).  The cumulative dictionary is rebuilt
+//   at most once per page regardless of how many indices land in that page --
+//   far cheaper than calling random_access() once per index (each of which
+//   would independently rebuild it up to that page).
+std::vector<std::string> batch_random_access(const EncodedColumn& col,
+                                              const std::vector<uint32_t>& rowIndices) {
+    if (rowIndices.empty()) return {};
+
+    if (!col.dictionaryEnabled) {
+        std::vector<std::string> result;
+        result.reserve(rowIndices.size());
+        for (uint32_t idx : rowIndices) {
+            if (idx >= static_cast<uint32_t>(col.rawValues.size())) {
+                throw std::out_of_range("Row index out of range");
+            }
+            result.push_back(col.rawValues[idx]);
+        }
+        return result;
+    }
+
+    std::vector<std::string> result(rowIndices.size());
+    std::vector<std::string> cumulativeDict;
+
+    uint32_t rowStart = 0;
+    size_t   queryPos = 0;  // next unprocessed position in rowIndices
+
+    for (const EncodedPage& page : col.pages) {
+        const uint32_t rowEnd = rowStart + page.rowCount;
+
+        // Find all query indices that land in [rowStart, rowEnd).
+        // rowIndices is sorted so we can scan forward from queryPos.
+        const size_t pageQueryStart = queryPos;
+        while (queryPos < rowIndices.size() && rowIndices[queryPos] < rowEnd) {
+            ++queryPos;
+        }
+        const size_t pageQueryEnd = queryPos;
+
+        // Maintain the cumulative dictionary for all pages we walk, even those
+        // with no matching indices -- subsequent diff pages depend on it.
+        if (page.isLocal) {
+            cumulativeDict = page.dictionary;
+        } else {
+            cumulativeDict.insert(cumulativeDict.end(),
+                                  page.dictionary.begin(),
+                                  page.dictionary.end());
+        }
+
+        // Resolve each query index that falls in this page.
+        for (size_t qi = pageQueryStart; qi < pageQueryEnd; ++qi) {
+            const uint32_t withinPage = rowIndices[qi] - rowStart;
+            const uint32_t offset     = page.offsets[withinPage];
+            if (offset >= static_cast<uint32_t>(cumulativeDict.size())) {
+                throw std::runtime_error("Corrupt data: offset out of range");
+            }
+            result[qi] = cumulativeDict[offset];
+        }
+
+        rowStart = rowEnd;
+        if (queryPos >= rowIndices.size()) break;  // all queries answered
+    }
+
+    return result;
 }
 
 } // namespace ac

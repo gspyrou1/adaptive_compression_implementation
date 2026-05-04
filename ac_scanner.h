@@ -27,4 +27,16 @@ std::vector<uint32_t> filtered_scan(const EncodedColumn& col,
                                      const std::string& target,
                                      ScanStats& stats);
 
+// Filtered scan — random access (§3.2.4).
+//
+// Finds all rows in predicateCol where the value equals target, then fetches
+// the corresponding values from payloadCol.  Result[i] is the payloadCol value
+// for the i-th matching row (in ascending row order).
+//
+// Equivalent to: batch_random_access(payloadCol, filtered_scan(predicateCol, target))
+// but expressed as a single logical operation.
+std::vector<std::string> filtered_scan_random_access(const EncodedColumn& predicateCol,
+                                                      const std::string& target,
+                                                      const EncodedColumn& payloadCol);
+
 } // namespace ac
