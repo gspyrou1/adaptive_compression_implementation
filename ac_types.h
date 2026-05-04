@@ -42,9 +42,16 @@ struct EncodedPage {
 
     // Distance (in pages) back to the local page that started this sequence.
     // Always 0 for local pages. For differential pages: 1 for the first diff
-    // after a local, 2 for the second, etc. Enables O(sequence_length) random
-    // access without scanning from the beginning of the column.
+    // after a local, 2 for the second, etc.
     uint32_t diffDepth = 0;
+
+    // Sizes of every dictionary in the sequence, from the local page to this
+    // page inclusive.  Empty for local pages.  Stored in the page header so
+    // that random_access can binary-search for the page that owns a given
+    // offset without rebuilding the cumulative dictionary: a prefix-sum scan
+    // over dictSizes identifies the right page in O(sequence_length), then
+    // only that one dictionary page needs to be read -- two page reads total.
+    std::vector<uint32_t> dictSizes;
 };
 
 // All compressed pages for one column, plus bookkeeping metadata.

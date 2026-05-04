@@ -54,26 +54,37 @@ std::string random_access(const EncodedColumn& col, uint32_t rowIndex) {
         return targetPage.dictionary[offset];
     }
 
-    // Step 2b: differential page -- jump to sequence start using diffDepth,
-    // then rebuild the cumulative dictionary only for this sequence prefix.
+    // Step 2b: differential page -- two-page read (paper §3.2.5).
+    //
+    // dictSizes holds the size of every dictionary in the sequence, from the
+    // local page to this page inclusive.  A prefix-sum scan over dictSizes
+    // identifies which page in the sequence owns the offset, so we can read
+    // that one page's dictionary directly without rebuilding the cumulative
+    // structure.
     const uint32_t localPageIdx = pageIdx - targetPage.diffDepth;
+    const std::vector<uint32_t>& sizes = targetPage.dictSizes;
 
-    std::vector<std::string> cumulativeDict;
-    for (uint32_t i = localPageIdx; i <= pageIdx; ++i) {
-        const EncodedPage& p = col.pages[i];
-        if (p.isLocal) {
-            cumulativeDict = p.dictionary;
-        } else {
-            for (const std::string& v : p.dictionary) {
-                cumulativeDict.push_back(v);
-            }
-        }
+    if (sizes.empty()) {
+        throw std::runtime_error("Corrupt data: dictSizes missing on differential page");
     }
 
-    if (offset >= static_cast<uint32_t>(cumulativeDict.size())) {
+    uint32_t cumSum = 0;
+    uint32_t seqPos = 0;
+    for (uint32_t i = 0; i < static_cast<uint32_t>(sizes.size()); ++i) {
+        if (offset < cumSum + sizes[i]) {
+            seqPos = i;
+            break;
+        }
+        cumSum += sizes[i];
+    }
+
+    const EncodedPage& dictPage   = col.pages[localPageIdx + seqPos];
+    const uint32_t     dictOffset = offset - cumSum;
+
+    if (dictOffset >= static_cast<uint32_t>(dictPage.dictionary.size())) {
         throw std::runtime_error("Corrupt data: offset out of range");
     }
-    return cumulativeDict[offset];
+    return dictPage.dictionary[dictOffset];
 }
 
 // Batch random access (§3.2.4).

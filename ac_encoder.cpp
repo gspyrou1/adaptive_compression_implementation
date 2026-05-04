@@ -33,6 +33,12 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
     uint32_t diffCount                = 0;  // differential pages in current sequence
     uint64_t diffDictionaryBytesTotal = 0;  // total dict bytes across those diff pages
 
+    // Sizes of each dictionary committed in the current sequence, in order
+    // from the local page onward.  Copied into EncodedPage::dictSizes for
+    // every differential page so that random_access can locate the right
+    // dictionary without rebuilding the cumulative structure.
+    std::vector<uint32_t> sequenceDictSizes;
+
     // Bloom filter over the local dictionary that started the current sequence.
     // Built (or rebuilt) every time we commit to a local page.  Used in Rule 2
     // to check whether the current page's values still overlap enough with the
@@ -66,6 +72,7 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
         if (distinctRatio > kDistinctRatioDisable) {
             cumulativeDictionary.clear();
             cumulativeIndex.clear();
+            sequenceDictSizes.clear();
             currentOffsetWidth       = 1;
             diffCount                = 0;
             diffDictionaryBytesTotal = 0;
@@ -228,6 +235,9 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
             diffCount                = 0;
             diffDictionaryBytesTotal = 0;
 
+            // Start a fresh dictSizes list for the new sequence.
+            sequenceDictSizes = { static_cast<uint32_t>(localDict.size()) };
+
         } else {
             encoded.isLocal     = false;
             encoded.offsetWidth = diffOffsetWidth;
@@ -255,6 +265,10 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
                                             static_cast<uint32_t>(cumulativeDictionary.size()));
             ++diffCount;
             diffDictionaryBytesTotal += diffDictBytes;
+
+            // Append this page's dict size and snapshot into the page header.
+            sequenceDictSizes.push_back(static_cast<uint32_t>(diffDict.size()));
+            encoded.dictSizes = sequenceDictSizes;
         }
 
         column.pages.push_back(encoded);

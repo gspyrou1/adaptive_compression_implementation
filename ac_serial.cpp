@@ -49,6 +49,8 @@ void write_column(std::ostream& os, const EncodedColumn& col) {
         write_u8 (os, page.offsetWidth);
         write_u32(os, page.rowCount);
         write_u32(os, page.diffDepth);
+        write_u32(os, static_cast<uint32_t>(page.dictSizes.size()));
+        for (uint32_t s : page.dictSizes) write_u32(os, s);
 
         write_string(os, page.pageMin);
         write_string(os, page.pageMax);
@@ -133,6 +135,9 @@ EncodedColumn read_column(std::istream& is) {
         page.offsetWidth = read_u8(is);
         page.rowCount    = read_u32(is);
         page.diffDepth   = read_u32(is);
+        const uint32_t dictSizesCount = read_u32(is);
+        page.dictSizes.resize(static_cast<size_t>(dictSizesCount));
+        for (uint32_t i = 0; i < dictSizesCount; ++i) page.dictSizes[i] = read_u32(is);
 
         page.pageMin = read_string(is);
         page.pageMax = read_string(is);
