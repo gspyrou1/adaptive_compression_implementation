@@ -119,8 +119,10 @@ reported for our system only.
 Table~\ref{tab:compression} compares compressed size, ratio, and write
 time across both systems using identical columns. Our system reports
 per tested string column; DuckDB/Parquet covers the full file (all column
-types). \emph{Local\%} and \emph{Diff\%} apply only to our adaptive encoder
-and are shown as ``---'' for DuckDB.
+types). \emph{Local\%}, \emph{Diff\%}, and \emph{Raw\%} apply only to our
+adaptive encoder and are shown as ``---'' for DuckDB. Raw pages are emitted
+when more than 80\% of a page's values are distinct; values are stored
+verbatim with no dictionary overhead.
 
 \begin{table}[h]
 \centering
@@ -128,40 +130,40 @@ and are shown as ``---'' for DuckDB.
          the tested string columns; DuckDB/Parquet covers the full file.}
 \label{tab:compression}
 \resizebox{\linewidth}{!}{%
-\begin{tabular}{llrrrrrr}
+\begin{tabular}{llrrrrrrr}
 \toprule
 \textbf{Dataset} & \textbf{System / Column} &
   \textbf{Raw (MB)} & \textbf{Comp.\ (MB)} & \textbf{Ratio} &
-  \textbf{Write (ms)} & \textbf{Local\,\%} & \textbf{Diff\,\%} \\
+  \textbf{Write (ms)} & \textbf{Local\,\%} & \textbf{Diff\,\%} & \textbf{Raw\,\%} \\
 \midrule
 \multirow{6}{*}{\texttt{views\_stats}}
-  & Ours\,--\,Col.\,1 (month)        &  33.4 &   4.79 &  6.98$\times$ &   427 &   1.3 &  98.7 \\
-  & Ours\,--\,Col.\,2 (artifact ID)  & 219.3 &  58.65 &  3.74$\times$ &  2296 &   1.3 &  98.7 \\
-  & Ours\,--\,Col.\,3 (data source)  &  37.5 &   4.78 &  7.84$\times$ &   156 &   1.3 &  98.7 \\
-  & Ours\,--\,Col.\,4 (project ID)   & 219.3 &   4.79 & 45.79$\times$ &   277 &   2.6 &  97.4 \\
-\cmidrule{2-8}
-  & DuckDB\,--\,Parquet/Snappy       & 538.5 &  36.0 & 14.97$\times$ &   870 & --- & --- \\
-  & DuckDB\,--\,Parquet/Zstd         & 538.5 &  22.0 & 24.49$\times$ &   961 & --- & --- \\
+  & Ours\,--\,Col.\,1 (month)        &  33.4 &   4.79 &  6.98$\times$ &   685 &   1.3 &  98.7 &   0.0 \\
+  & Ours\,--\,Col.\,2 (artifact ID)  & 219.3 &  58.65 &  3.74$\times$ &  2237 &   1.3 &  98.7 &   0.0 \\
+  & Ours\,--\,Col.\,3 (data source)  &  37.5 &   4.78 &  7.84$\times$ &   157 &   1.3 &  98.7 &   0.0 \\
+  & Ours\,--\,Col.\,4 (project ID)   & 219.3 &   4.79 & 45.79$\times$ &   274 &   2.6 &  97.4 &   0.0 \\
+\cmidrule{2-9}
+  & DuckDB\,--\,Parquet/Snappy       & 538.5 &  36.0 & 14.97$\times$ &   870 & --- & --- & --- \\
+  & DuckDB\,--\,Parquet/Zstd         & 538.5 &  22.0 & 24.49$\times$ &   961 & --- & --- & --- \\
 \midrule
 \multirow{5}{*}{\texttt{artifact\_authors}}
-  & Ours\,--\,Col.\,1 (artifact ID)  & 435.7 &  79.62 &  5.47$\times$ &  2845 &  42.1 &  57.9 \\
-  & Ours\,--\,Col.\,3 (display name) & 136.6 & 146.72 &  0.93$\times$ & 10171 &  40.8 &  59.2 \\
-  & Ours\,--\,Col.\,5 (last name)    &  34.0 &  35.79 &  0.95$\times$ &  2617 &  15.8 &  84.2 \\
-\cmidrule{2-8}
-  & DuckDB\,--\,Parquet/Snappy       & 2882.3 & 403.8 &  7.14$\times$ &  6293 & --- & --- \\
-  & DuckDB\,--\,Parquet/Zstd         & 2882.3 & 203.9 & 14.13$\times$ &  6837 & --- & --- \\
+  & Ours\,--\,Col.\,1 (artifact ID)  & 435.7 &  79.62 &  5.47$\times$ &  2778 &  42.1 &  57.9 &   0.0 \\
+  & Ours\,--\,Col.\,3 (display name) & 136.6 & 155.75 &  0.88$\times$ &  6577 &  24.3 &  35.5 &  40.1 \\
+  & Ours\,--\,Col.\,5 (last name)    &  34.0 &  35.79 &  0.95$\times$ &  2579 &  15.8 &  84.2 &   0.0 \\
+\cmidrule{2-9}
+  & DuckDB\,--\,Parquet/Snappy       & 2882.3 & 403.8 &  7.14$\times$ &  6293 & --- & --- & --- \\
+  & DuckDB\,--\,Parquet/Zstd         & 2882.3 & 203.9 & 14.13$\times$ &  6837 & --- & --- & --- \\
 \midrule
 \multirow{9}{*}{\texttt{artifacts}}
-  & Ours\,--\,Col.\,1  (artifact ID) & 165.1 & 186.68 &  0.88$\times$ &  6544 & 100.0 &   0.0 \\
-  & Ours\,--\,Col.\,2  (title)       & 313.5 & 334.35 &  0.94$\times$ &  9787 & 100.0 &   0.0 \\
-  & Ours\,--\,Col.\,3  (publisher)   &  46.6 &   8.65 &  5.39$\times$ &   465 &   1.7 &  98.3 \\
-  & Ours\,--\,Col.\,4  (journal)     &  49.9 &  12.60 &  3.96$\times$ &   907 &   3.4 &  96.6 \\
-  & Ours\,--\,Col.\,7  (access type) &  40.6 &   3.60 & 11.26$\times$ &   189 &   1.7 &  98.3 \\
-  & Ours\,--\,Col.\,9  (boolean)     &  17.9 &   3.60 &  4.99$\times$ &   132 &   1.7 &  98.3 \\
-  & Ours\,--\,Col.\,13 (type)        &  36.6 &   3.60 & 10.16$\times$ &   138 &   1.7 &  98.3 \\
-\cmidrule{2-8}
-  & DuckDB\,--\,Parquet/Snappy       & 1090.2 & 503.5 &  2.17$\times$ &  3587 & --- & --- \\
-  & DuckDB\,--\,Parquet/Zstd         & 1090.2 & 294.2 &  3.71$\times$ &  4141 & --- & --- \\
+  & Ours\,--\,Col.\,1  (artifact ID) & 165.1 & 179.49 &  0.92$\times$ &  1361 &   0.0 &   0.0 & 100.0 \\
+  & Ours\,--\,Col.\,2  (title)       & 313.5 & 327.84 &  0.96$\times$ &  1998 &   0.0 &   0.0 & 100.0 \\
+  & Ours\,--\,Col.\,3  (publisher)   &  46.6 &   8.65 &  5.39$\times$ &   454 &   1.7 &  98.3 &   0.0 \\
+  & Ours\,--\,Col.\,4  (journal)     &  49.9 &  12.60 &  3.96$\times$ &   899 &   3.4 &  96.6 &   0.0 \\
+  & Ours\,--\,Col.\,7  (access type) &  40.6 &   3.60 & 11.26$\times$ &   190 &   1.7 &  98.3 &   0.0 \\
+  & Ours\,--\,Col.\,9  (boolean)     &  17.9 &   3.60 &  4.99$\times$ &   131 &   1.7 &  98.3 &   0.0 \\
+  & Ours\,--\,Col.\,13 (type)        &  36.6 &   3.60 & 10.16$\times$ &   138 &   1.7 &  98.3 &   0.0 \\
+\cmidrule{2-9}
+  & DuckDB\,--\,Parquet/Snappy       & 1090.2 & 503.5 &  2.17$\times$ &  3587 & --- & --- & --- \\
+  & DuckDB\,--\,Parquet/Zstd         & 1090.2 & 294.2 &  3.71$\times$ &  4141 & --- & --- & --- \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -189,10 +191,10 @@ report \textbf{Time (ms)} for direct comparison.
 \midrule
 \multirow{7}{*}{\texttt{views\_stats}}
   & \multirow{4}{*}{Ours}
-    & Col.\,1 -- month        &   83.5 \\
-  & & Col.\,2 -- artifact ID  &  358.3 \\
-  & & Col.\,3 -- data source  &   37.1 \\
-  & & Col.\,4 -- project ID   &  277.4 \\
+    & Col.\,1 -- month        &   85.3 \\
+  & & Col.\,2 -- artifact ID  &  351.2 \\
+  & & Col.\,3 -- data source  &   35.3 \\
+  & & Col.\,4 -- project ID   &  276.8 \\
 \cmidrule{2-4}
   & \multirow{3}{*}{DuckDB}
     & CSV (4 cols)             &  317.6 \\
@@ -201,9 +203,9 @@ report \textbf{Time (ms)} for direct comparison.
 \midrule
 \multirow{6}{*}{\texttt{artifact\_authors}}
   & \multirow{3}{*}{Ours}
-    & Col.\,1 -- artifact ID   &  875.9 \\
-  & & Col.\,3 -- display name  &  709.5 \\
-  & & Col.\,5 -- last name     &  259.6 \\
+    & Col.\,1 -- artifact ID   &  808.8 \\
+  & & Col.\,3 -- display name  &  544.8 \\
+  & & Col.\,5 -- last name     &  250.4 \\
 \cmidrule{2-4}
   & \multirow{3}{*}{DuckDB}
     & CSV (3 cols)             & 2416.1 \\
@@ -212,13 +214,13 @@ report \textbf{Time (ms)} for direct comparison.
 \midrule
 \multirow{10}{*}{\texttt{artifacts}}
   & \multirow{7}{*}{Ours}
-    & Col.\,1  -- artifact ID  &  348.3 \\
-  & & Col.\,2  -- title        &  841.3 \\
-  & & Col.\,3  -- publisher    &  131.0 \\
-  & & Col.\,4  -- journal      &  181.9 \\
-  & & Col.\,7  -- access type  &   27.4 \\
-  & & Col.\,9  -- boolean      &   28.8 \\
-  & & Col.\,13 -- type         &   28.3 \\
+    & Col.\,1  -- artifact ID  &  206.9 \\
+  & & Col.\,2  -- title        &  442.1 \\
+  & & Col.\,3  -- publisher    &  130.6 \\
+  & & Col.\,4  -- journal      &  180.4 \\
+  & & Col.\,7  -- access type  &   27.0 \\
+  & & Col.\,9  -- boolean      &   28.0 \\
+  & & Col.\,13 -- type         &   27.5 \\
 \cmidrule{2-4}
   & \multirow{3}{*}{DuckDB}
     & CSV (7 cols)             &  755.0 \\
@@ -258,13 +260,13 @@ and offset-scan respectively (total pages = 77 for \texttt{views\_stats},
      \textbf{CSV} & \textbf{PQ/Snappy} & \textbf{PQ/Zstd} \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,1 -- month (low cardinality)}} \\
-\quad\texttt{2023/01}   & 116\,640 &  2.54 & 16 & 1 & 227.6 &  3.9 &  4.7 \\
-\quad\texttt{2019/05}   &  24\,400 &  1.66 & 21 & 1 & 219.7 &  3.7 &  4.1 \\
-\quad\texttt{2022/07}   & 113\,590 &  2.52 & 16 & 2 & 220.9 &  3.9 &  4.5 \\
+\quad\texttt{2023/01}   & 116\,640 &  3.04 & 16 & 1 & 227.6 &  3.9 &  4.7 \\
+\quad\texttt{2019/05}   &  24\,400 &  2.11 & 21 & 1 & 219.7 &  3.7 &  4.1 \\
+\quad\texttt{2022/07}   & 113\,590 &  3.00 & 16 & 2 & 220.9 &  3.9 &  4.5 \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,3 -- data source (very-low cardinality)}} \\
-\quad\texttt{OpenAIRE}  & 3\,580\,082 &  9.56 & 20 & 0 & 216.9 &  2.6 &  2.6 \\
-\quad\texttt{IRUS-UK}   & 1\,141\,124 &  3.48 & 55 & 2 & 223.2 &  1.6 &  1.5 \\
+\quad\texttt{OpenAIRE}  & 3\,580\,082 &  9.67 & 20 & 0 & 216.9 &  2.6 &  2.6 \\
+\quad\texttt{IRUS-UK}   & 1\,141\,124 &  3.49 & 55 & 2 & 223.2 &  1.6 &  1.5 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -287,13 +289,13 @@ and offset-scan respectively (total pages = 77 for \texttt{views\_stats},
  & & \textbf{Time} & \textbf{ZMSkip} & \textbf{DictSkip} &
      \textbf{CSV} & \textbf{PQ/Snappy} & \textbf{PQ/Zstd} \\
 \midrule
-\multicolumn{8}{l}{\textit{Col.\,3 -- display name (very-high cardinality)}} \\
-\quad\texttt{Shin, Y. H.} &     234 & 3.31 & 0 &  27 & 2408.8 & 104.2 & 108.9 \\
-\quad\texttt{Y. G. Xie}   &      50 & 2.26 & 0 &  68 & 2380.6 & 106.1 & 107.6 \\
-\quad\texttt{Mahakud B.}  &      19 & 1.35 & 0 & 106 & 2396.1 & 104.5 & 107.1 \\
+\multicolumn{8}{l}{\textit{Col.\,3 -- display name (very-high cardinality; 40\% raw pages)}} \\
+\quad\texttt{Shin, Y. H.} &     234 & 11.78 & 0 &  6 & 2408.8 & 104.2 & 108.9 \\
+\quad\texttt{Y. G. Xie}   &      50 &  9.32 & 0 & 52 & 2380.6 & 106.1 & 107.6 \\
+\quad\texttt{Mahakud B.}  &      19 &  9.48 & 0 & 62 & 2396.1 & 104.5 & 107.1 \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,5 -- last name (moderate cardinality)}} \\
-\quad\texttt{Shin}         &     963 & 4.11 & 0 &   0 & 2395.0 &  59.0 &  57.7 \\
+\quad\texttt{Shin}         &     963 &  5.36 & 0 &   0 & 2395.0 &  59.0 &  57.7 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -316,23 +318,24 @@ and offset-scan respectively (total pages = 77 for \texttt{views\_stats},
  & & \textbf{Time} & \textbf{ZMSkip} & \textbf{DictSkip} &
      \textbf{CSV} & \textbf{PQ/Snappy} & \textbf{PQ/Zstd} \\
 \midrule
-\multicolumn{8}{l}{\textit{Col.\,1 -- artifact ID (unique hash strings)}} \\
-\quad\texttt{doi\_::01a4\ldots} & 1 & 0.03 & 0 & 57 & --- & --- & --- \\
+\multicolumn{8}{l}{\textit{Col.\,1 -- artifact ID (unique; 100\% raw pages -- no dict-miss skipping)}} \\
+\quad\texttt{doi\_\_::01a4\ldots} & 1 & 17.60 & 0 & 0 & --- & --- & --- \\
+\quad\texttt{doi\_\_::f4a0\ldots} & 1 & 17.60 & 0 & 0 & --- & --- & --- \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,3 -- publisher (moderate cardinality)}} \\
-\quad\texttt{Zenodo}                   & 541\,420   &  4.53 & 0 & 0 & --- & --- & --- \\
-\quad\texttt{Centre de Donnees\ldots}  &   2\,587   &  1.66 & 0 & 0 & --- & --- & --- \\
+\quad\texttt{Zenodo}                   & 541\,420   &  4.98 & 0 & 0 & --- & --- & --- \\
+\quad\texttt{Centre de Donnees\ldots}  &   2\,587   &  2.06 & 0 & 0 & --- & --- & --- \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,7 -- access type (5 distinct values)}} \\
-\quad\texttt{Open Access}   & 3\,111\,358 & 10.65 & 0 & 0 & 718.0 & 7.0 & 7.6 \\
-\quad\texttt{not available} &   263\,771  &  3.60 & 0 & 0 & 634.3 & 4.9 & 4.9 \\
+\quad\texttt{Open Access}   & 3\,111\,358 & 11.01 & 0 & 0 & 718.0 & 7.0 & 7.6 \\
+\quad\texttt{not available} &   263\,771  &  4.27 & 0 & 0 & 634.3 & 4.9 & 4.9 \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,9 -- boolean (2 distinct values)}} \\
-\quad\texttt{false}         & 3\,761\,276 &  9.90 & 0 & 0 & 742.8 & 3.2 & 2.9 \\
+\quad\texttt{false}         & 3\,761\,276 & 10.05 & 0 & 0 & 742.8 & 3.2 & 2.9 \\
 \midrule
 \multicolumn{8}{l}{\textit{Col.\,13 -- artifact type (low cardinality)}} \\
-\quad\texttt{dataset}       &   713\,012  &  3.27 & 0 & 0 & 739.5 & 3.3 & 3.4 \\
-\quad\texttt{publication}   & 3\,013\,657 &  8.62 & 0 & 0 & 739.7 & 4.1 & 3.9 \\
+\quad\texttt{dataset}       &   713\,012  &  3.77 & 0 & 0 & 739.5 & 3.3 & 3.4 \\
+\quad\texttt{publication}   & 3\,013\,657 &  8.87 & 0 & 0 & 739.7 & 4.1 & 3.9 \\
 \bottomrule
 \end{tabular}}
 \end{table}
@@ -393,38 +396,49 @@ CSV/Parquet and is therefore not included.
 
 \paragraph{Compression ratio.}
 Adaptive compression excels on low-cardinality repeated columns:
-\texttt{views\_stats} col.\,4 (project ID, essentially a foreign key
-with many duplicates) achieves 45.79$\times$, while DuckDB/Zstd reaches
-24.49$\times$ on the same file. On high-cardinality near-unique columns
-(artifact IDs, free-text titles, display names), differential encoding
-offers no benefit and expansion occurs (0.88--0.95$\times$); the encoder
-correctly falls back to 100\% local pages in these cases. DuckDB/Parquet
-with Zstd is generally stronger on high-cardinality text.
+\texttt{views\_stats} col.\,4 (project ID) achieves 45.79$\times$, while
+DuckDB/Zstd reaches 24.49$\times$ on the same file. Per the paper's
+specification, pages where more than 80\% of values are distinct bypass
+dictionary encoding entirely and are stored raw. For fully unique columns
+(\texttt{artifacts} cols.\,1--2), this reduces expansion from the previous
+0.88--0.94$\times$ to 0.92--0.96$\times$; the residual overhead is the
+unavoidable 4-byte length prefix per string in our binary format. The
+\texttt{artifact\_authors} display name (col.\,3) is partially affected:
+40\% of its pages are raw, yielding 0.88$\times$ — slightly worse than
+the old local-dict encoding for that column because pages in the
+80--93\% distinct range store duplicate values twice in raw mode whereas
+a local dictionary would deduplicate them. DuckDB/Parquet with Zstd
+remains stronger on free-text columns overall.
 
 \paragraph{Full scan.}
-DuckDB on Parquet is faster for full-column materialisation, benefiting
-from vectorised execution and columnar projection. For
-\texttt{views\_stats}, which has very high differential ratios
-(98.7\% diff pages), our decompressor achieves up to 1\,GB/s per column.
-DuckDB's 0.9\,ms for four columns on the same dataset is exceptional but
-reflects that \texttt{count(col)} in a vectorised engine avoids full
-string materialisation.
+DuckDB on Parquet is faster for full-column materialisation due to
+vectorised execution and columnar projection. Raw-page decompression in
+our system is notably faster than local-dict decompression: \texttt{artifacts}
+cols.\,1--2 improved from 348--841\,ms to 207--442\,ms because raw pages
+require only a direct value copy with no offset lookups. For
+\texttt{views\_stats} (98.7\% diff pages) our decompressor reaches up to
+1.06\,GB/s per column.
 
 \paragraph{Filtered scan.}
-On low-cardinality columns where page skipping is effective, our filtered
-scan is \textbf{competitive with or faster than DuckDB/Parquet}.
-For \texttt{views\_stats} col.\,1 (month), we achieve 1.7--2.5\,ms
-versus 3.7--3.9\,ms for Parquet/Snappy. On high-cardinality columns with
-no zone-map or dict-miss skipping (e.g., access type, boolean), both
-systems must examine every page; DuckDB/Parquet is faster there (3--7\,ms
-versus 4--11\,ms) due to vectorised filtering. On the high-cardinality
-\texttt{artifact\_authors} display name, our dict-miss skipping eliminates
-up to 106 of 152 pages, yielding 1.4--3.3\,ms versus
-104--108\,ms for DuckDB/Parquet.
+On low-cardinality columns, our filtered scan is \textbf{competitive with
+or faster than DuckDB/Parquet}. For \texttt{views\_stats} col.\,1 (month)
+we achieve 2.1--3.0\,ms versus 3.7--3.9\,ms for Parquet/Snappy. Raw pages
+introduce a trade-off: they cannot use dict-miss skipping, so fully unique
+columns (\texttt{artifacts} col.\,1) now scan all 58 pages linearly
+($\approx$17.6\,ms) compared to near-instant scans when local dicts
+allowed 57-of-58 pages to be dict-skipped. Similarly, the
+\texttt{artifact\_authors} display name now dict-skips only 6--62 of 152
+pages (down from 27--106) because raw pages are opaque to the scanner,
+raising scan times from 1.4--3.3\,ms to 9.3--11.8\,ms --- still well
+below DuckDB/Parquet's 104--109\,ms. On fully low-cardinality columns
+(access type, boolean, type), both systems must scan every page and
+DuckDB/Parquet wins due to vectorised filtering (3--7\,ms vs.\ 4--11\,ms).
 
 \paragraph{Random access.}
 Our implementation provides sub-2\,\textmu{}s point queries via the
-two-page read scheme. This capability is not directly available in
-DuckDB over CSV/Parquet without a full table scan or pre-built index.
+two-page read scheme. Raw pages resolve in a single direct index with no
+dictionary lookup, keeping latency at the same sub-microsecond level.
+This capability is not directly available in DuckDB over CSV/Parquet
+without a full table scan or pre-built index.
 
 \end{document}

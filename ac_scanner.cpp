@@ -113,7 +113,9 @@ std::vector<uint32_t> filtered_scan(const EncodedColumn& col,
 
             // diffMin/diffMax covers the new values only.  If target is
             // outside that range, it was not introduced by this diff page.
-            if (!(target < page.diffMin || target > page.diffMax)) {
+            // If targetIdx is already set, target is in the cumulative dict
+            // and cannot appear in any diff dict -- skip the search entirely.
+            if (targetIdx == -1 && !(target < page.diffMin || target > page.diffMax)) {
                 auto it = std::lower_bound(page.dictionary.begin(),
                                            page.dictionary.end(), target);
                 if (it != page.dictionary.end() && *it == target) {
