@@ -70,12 +70,30 @@ EncodedColumn AdaptiveDictionaryEncoder::encode(uint32_t colIndex1Based,
                                      / static_cast<double>(pageRows);
 
         if (distinctRatio > kDistinctRatioDisable) {
+            // Reset sequence state: the next page starts a fresh sequence.
             cumulativeDictionary.clear();
             cumulativeIndex.clear();
             sequenceDictSizes.clear();
+            sequenceStartFilter      = BloomFilter();
             currentOffsetWidth       = 1;
             diffCount                = 0;
             diffDictionaryBytesTotal = 0;
+
+            // Store this page verbatim: a dictionary would cost as much as raw
+            // storage but add offset overhead, so we skip encoding entirely.
+            EncodedPage encoded;
+            encoded.isRaw    = true;
+            encoded.isLocal  = true;  // treated as a sequence-break, like a local page
+            encoded.rowCount = static_cast<uint32_t>(pageRows);
+            encoded.rawValues.assign(rangeBegin, rangeEnd);
+            auto mm = std::minmax_element(rangeBegin, rangeEnd);
+            encoded.pageMin = *mm.first;
+            encoded.pageMax = *mm.second;
+            encoded.diffMin = encoded.pageMin;
+            encoded.diffMax = encoded.pageMax;
+
+            column.pages.push_back(std::move(encoded));
+            continue;
         }
 
         // ------------------------------------------------------------------

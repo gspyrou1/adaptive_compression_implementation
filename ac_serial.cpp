@@ -45,6 +45,17 @@ void write_column(std::ostream& os, const EncodedColumn& col) {
     write_u32(os, static_cast<uint32_t>(col.pages.size()));
 
     for (const EncodedPage& page : col.pages) {
+        // Page type: 0 = local, 1 = differential, 2 = raw.
+        if (page.isRaw) {
+            write_u8 (os, 2);
+            write_u32(os, page.rowCount);
+            write_string(os, page.pageMin);
+            write_string(os, page.pageMax);
+            write_u32(os, static_cast<uint32_t>(page.rawValues.size()));
+            for (const std::string& v : page.rawValues) write_string(os, v);
+            continue;
+        }
+
         write_u8 (os, page.isLocal ? 0 : 1);
         write_u8 (os, page.offsetWidth);
         write_u32(os, page.rowCount);
@@ -130,8 +141,22 @@ EncodedColumn read_column(std::istream& is) {
     for (uint32_t p = 0; p < pageCount; ++p) {
         EncodedPage& page = col.pages[p];
 
-        // isLocal: 0 = local, 1 = differential (mirrors write_column).
-        page.isLocal     = (read_u8(is) == 0);
+        // Page type: 0 = local, 1 = differential, 2 = raw.
+        const uint8_t pageType = read_u8(is);
+
+        if (pageType == 2) {
+            page.isRaw    = true;
+            page.isLocal  = true;
+            page.rowCount = read_u32(is);
+            page.pageMin  = read_string(is);
+            page.pageMax  = read_string(is);
+            const uint32_t count = read_u32(is);
+            page.rawValues.resize(static_cast<size_t>(count));
+            for (uint32_t i = 0; i < count; ++i) page.rawValues[i] = read_string(is);
+            continue;
+        }
+
+        page.isLocal     = (pageType == 0);
         page.offsetWidth = read_u8(is);
         page.rowCount    = read_u32(is);
         page.diffDepth   = read_u32(is);

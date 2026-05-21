@@ -22,18 +22,23 @@ constexpr double kMinCrossPageRepeatRatio = 0.10;
 
 // One compressed page of a column.
 //
-// A page is either:
-//   local       -- self-contained; its dictionary holds all distinct values in this page.
+// A page is one of three types:
+//   local       -- self-contained; dictionary holds all distinct values in this page.
 //   differential -- only NEW values (not seen in earlier pages of the sequence) are
 //                   stored in the dictionary; offsets index into the cumulative dictionary
 //                   built from the local page + all prior differential pages.
+//   raw         -- distinct-ratio exceeded 80%; values are stored verbatim with no
+//                  dictionary or offsets. rawValues holds one entry per row.
+//                  Raw pages break the current differential sequence.
 struct EncodedPage {
     bool     isLocal      = true;
+    bool     isRaw        = false;  // true when distinct ratio > kDistinctRatioDisable
     uint8_t  offsetWidth  = 1;     // bytes per offset: 1, 2, or 4
     uint32_t rowCount     = 0;
 
     std::vector<std::string> dictionary;  // local: all distinct values; diff: new values only
     std::vector<uint32_t>    offsets;     // one index per row into the (cumulative) dictionary
+    std::vector<std::string> rawValues;   // raw pages only: per-row values (no dictionary)
 
     std::string pageMin;   // min value in this page (used as a zone map)
     std::string pageMax;   // max value in this page (used as a zone map)

@@ -58,6 +58,7 @@ struct PageStats {
     uint32_t totalPages  = 0;
     uint32_t localPages  = 0;
     uint32_t diffPages   = 0;
+    uint32_t rawPages    = 0;
     double   avgDictSize = 0.0;
     uint64_t compBytes   = 0;
     double   compRatio   = 0.0;
@@ -73,17 +74,20 @@ static PageStats compute_page_stats(const ac::EncodedColumn& col,
         return s;
     }
 
-    uint64_t dictSizeSum = 0;
+    uint64_t dictSizeSum  = 0;
+    uint32_t dictPageCount = 0;  // exclude raw pages from avgDictSize
     for (const ac::EncodedPage& p : col.pages) {
         ++s.totalPages;
-        if (p.isLocal) ++s.localPages;
-        else           ++s.diffPages;
+        if (p.isRaw)        { ++s.rawPages;   continue; }
+        if (p.isLocal)      ++s.localPages;
+        else                ++s.diffPages;
         dictSizeSum += p.dictionary.size();
+        ++dictPageCount;
     }
 
-    if (s.totalPages > 0) {
+    if (dictPageCount > 0) {
         s.avgDictSize = static_cast<double>(dictSizeSum)
-                        / static_cast<double>(s.totalPages);
+                        / static_cast<double>(dictPageCount);
     }
 
     s.compBytes = compute_compressed_bytes(col);
@@ -227,16 +231,19 @@ static void bench_column(uint32_t colIdx,
                                  / (1024.0 * 1024.0);
     const double localPct = (ps.totalPages > 0)
         ? 100.0 * ps.localPages / ps.totalPages : 0.0;
-    const double diffPct  = 100.0 - localPct;
+    const double diffPct  = (ps.totalPages > 0)
+        ? 100.0 * ps.diffPages  / ps.totalPages : 0.0;
+    const double rawPct   = (ps.totalPages > 0)
+        ? 100.0 * ps.rawPages   / ps.totalPages : 0.0;
 
     printf("  COMPRESSION  (%d runs, warm cache)\n", N_RUNS);
     print_line();
-    printf("  %10s %14s %9s %9s %8s %7s %9s\n",
-           "Time(ms)", "Rows/s", "MB/s", "Ratio", "Local%", "Diff%", "AvgDict");
+    printf("  %10s %14s %9s %9s %8s %7s %6s %9s\n",
+           "Time(ms)", "Rows/s", "MB/s", "Ratio", "Local%", "Diff%", "Raw%", "AvgDict");
     print_line();
-    printf("  %10.1f %14.0f %9.1f %8.2fx %7.1f%% %6.1f%% %9.0f\n",
+    printf("  %10.1f %14.0f %9.1f %8.2fx %7.1f%% %6.1f%% %5.1f%% %9.0f\n",
            encMs, rowsPerSecEnc, mbPerSecEnc,
-           ps.compRatio, localPct, diffPct, ps.avgDictSize);
+           ps.compRatio, localPct, diffPct, rawPct, ps.avgDictSize);
 
     // ------------------------------------------------------------------
     // Decompression / full scan (paper section 3.2.2)
@@ -341,9 +348,9 @@ static void bench_column(uint32_t colIdx,
     print_line();
     printf("  %12.4f %12.4f %12.4f\n", avgMs, minMs, maxMs);
 
-    printf("\n  Compressed: %.2f MB  |  Ratio: %.2fx  |  Pages: %u local, %u diff\n\n",
+    printf("\n  Compressed: %.2f MB  |  Ratio: %.2fx  |  Pages: %u local, %u diff, %u raw\n\n",
            static_cast<double>(ps.compBytes) / (1024.0 * 1024.0),
-           ps.compRatio, ps.localPages, ps.diffPages);
+           ps.compRatio, ps.localPages, ps.diffPages, ps.rawPages);
 }
 
 // ---------------------------------------------------------------------------

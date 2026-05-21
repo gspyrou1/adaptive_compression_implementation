@@ -53,6 +53,26 @@ std::vector<uint32_t> filtered_scan(const EncodedColumn& col,
         ++stats.totalPages;
         const uint32_t rows = page.rowCount;
 
+        if (page.isRaw) {
+            // Raw page: no dictionary. Reset cumulative state (this page breaks
+            // any differential sequence), then do a plain linear scan.
+            cumulativeSize = 0;
+            targetIdx      = -1;
+
+            if (target < page.pageMin || target > page.pageMax) {
+                ++stats.pagesSkippedZoneMap;
+                rowStart += rows;
+                continue;
+            }
+
+            ++stats.pagesScanned;
+            for (uint32_t i = 0; i < rows; ++i) {
+                if (page.rawValues[i] == target) result.push_back(rowStart + i);
+            }
+            rowStart += rows;
+            continue;
+        }
+
         if (page.isLocal) {
             // ------------------------------------------------------------------
             // Local page: the cumulative dictionary resets to this page's

@@ -42,9 +42,18 @@ std::string random_access(const EncodedColumn& col, uint32_t rowIndex) {
         throw std::out_of_range("Row index out of range");
     }
 
-    const EncodedPage& targetPage  = col.pages[pageIdx];
-    const uint32_t     withinPage  = rowIndex - rowStart;
-    const uint32_t     offset      = targetPage.offsets[withinPage];
+    const EncodedPage& targetPage = col.pages[pageIdx];
+    const uint32_t     withinPage = rowIndex - rowStart;
+
+    // Raw page: values stored verbatim, no dictionary or offsets.
+    if (targetPage.isRaw) {
+        if (withinPage >= static_cast<uint32_t>(targetPage.rawValues.size())) {
+            throw std::runtime_error("Corrupt data: raw page index out of range");
+        }
+        return targetPage.rawValues[withinPage];
+    }
+
+    const uint32_t offset = targetPage.offsets[withinPage];
 
     // Step 2a: local page -- dictionary is self-contained.
     if (targetPage.isLocal) {
@@ -134,22 +143,32 @@ std::vector<std::string> batch_random_access(const EncodedColumn& col,
 
         // Maintain the cumulative dictionary for all pages we walk, even those
         // with no matching indices -- subsequent diff pages depend on it.
-        if (page.isLocal) {
-            cumulativeDict = page.dictionary;
-        } else {
-            cumulativeDict.insert(cumulativeDict.end(),
-                                  page.dictionary.begin(),
-                                  page.dictionary.end());
-        }
-
-        // Resolve each query index that falls in this page.
-        for (size_t qi = pageQueryStart; qi < pageQueryEnd; ++qi) {
-            const uint32_t withinPage = rowIndices[qi] - rowStart;
-            const uint32_t offset     = page.offsets[withinPage];
-            if (offset >= static_cast<uint32_t>(cumulativeDict.size())) {
-                throw std::runtime_error("Corrupt data: offset out of range");
+        if (page.isRaw) {
+            // Raw page breaks the sequence; no cumulative dict to maintain.
+            // Resolve queries directly from stored per-row values.
+            cumulativeDict.clear();
+            for (size_t qi = pageQueryStart; qi < pageQueryEnd; ++qi) {
+                const uint32_t withinPage = rowIndices[qi] - rowStart;
+                result[qi] = page.rawValues[withinPage];
             }
-            result[qi] = cumulativeDict[offset];
+        } else {
+            if (page.isLocal) {
+                cumulativeDict = page.dictionary;
+            } else {
+                cumulativeDict.insert(cumulativeDict.end(),
+                                      page.dictionary.begin(),
+                                      page.dictionary.end());
+            }
+
+            // Resolve each query index that falls in this page.
+            for (size_t qi = pageQueryStart; qi < pageQueryEnd; ++qi) {
+                const uint32_t withinPage = rowIndices[qi] - rowStart;
+                const uint32_t offset     = page.offsets[withinPage];
+                if (offset >= static_cast<uint32_t>(cumulativeDict.size())) {
+                    throw std::runtime_error("Corrupt data: offset out of range");
+                }
+                result[qi] = cumulativeDict[offset];
+            }
         }
 
         rowStart = rowEnd;

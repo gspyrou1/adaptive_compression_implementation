@@ -48,6 +48,14 @@ DecodedColumn decompress_column(const EncodedColumn& col) {
 
     for (const EncodedPage& page : col.pages) {
 
+        if (page.isRaw) {
+            // Raw page: values were stored verbatim; no dictionary to consult.
+            for (const std::string& v : page.rawValues) {
+                result.values.push_back(v);
+            }
+            continue;
+        }
+
         if (page.isLocal) {
             // Local page: replace the cumulative dictionary entirely.
             // This page is self-contained, just like an I-frame in video.
