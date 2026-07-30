@@ -3,7 +3,7 @@
 A from-scratch C++14 implementation of the adaptive dictionary compression scheme described in:
 
 > Yannis Foufoulas, Lefteris Sidirourgos, Eleftherios Stamatogiannakis, Yannis Ioannidis.
-> **"Adaptive Compression for Fast Scans on String Columns."** SIGMOD '21, pp. 554–562.
+> **"Adaptive Compression for Fast Scans on String Columns."** SIGMOD '21, pp. 554-562.
 > [doi:10.1145/3448016.3452798](https://doi.org/10.1145/3448016.3452798)
 > (a copy is included in this repo as `adaptive_compression.pdf`)
 
@@ -39,27 +39,27 @@ the write-up of the measured results (`report.tex`, with raw numbers in
 
 Columnar OLAP systems dictionary-encode string columns: store each distinct string
 once in a dictionary, and store one integer *offset* per row. There are two classic
-ways to scope that dictionary, and each loses something:
+ways to scope that dictionary, and each of them loses something.
 
 | | Local (block-level) dictionary | Global (table-level) dictionary |
 |---|---|---|
 | Used by | Parquet, ORC | IBM DB2 BLU, SAP HANA |
-| Offset width | Small — few distinct values per block | Large — every distinct value in the table |
+| Offset width | Small, since each block has few distinct values | Large, since it covers every distinct value in the table |
 | Duplicate values | Repeated in every block that contains them | Stored once |
-| Filtered scan | One dictionary lookup **per block** | One lookup total, but every block's offsets must be scanned |
-| Random access | Cheap — the block is self-contained | Needs the (big) global dictionary |
+| Filtered scan | One dictionary lookup per block | One lookup total, but every block's offsets must be scanned |
+| Random access | Cheap, because the block is self-contained | Needs the (big) global dictionary |
 
-The paper's insight is that you do not have to pick. Encode a column as a run of
-pages where the first is self-contained and the following ones store only the
-values that are *new* relative to their predecessors — the same idea as I-frames
-and P-frames in video compression. The result behaves like a global dictionary for
-storage (duplicates across pages are not repeated) and like a local dictionary for
-queries (offsets stay narrow, pages stay individually skippable), and a cost
-function decides *at compression time* when the next page should restart the run.
+The paper's insight is that you do not have to pick one. Encode a column as a run of
+pages where the first is self-contained and the following ones store only the values
+that are new relative to their predecessors, the same idea as I-frames and P-frames
+in video compression. The result behaves like a global dictionary for storage, since
+duplicates across pages are not repeated, and like a local dictionary for queries,
+since offsets stay narrow and pages stay individually skippable. A cost function
+decides at compression time when the next page should restart the run.
 
 This implementation reproduces that scheme, its cost function, its page-skipping
-statistics, and its two-page random access, and measures all of it against
-DuckDB reading Parquet/Snappy and Parquet/Zstd.
+statistics, and its two-page random access, and measures all of it against DuckDB
+reading Parquet/Snappy and Parquet/Zstd.
 
 ---
 
@@ -100,7 +100,7 @@ Measure it:
 ./bench sample.csv --runs 3 2 3
 ```
 
-which prints, per column, compression ratio and page-type mix, full-scan
+For each column this prints the compression ratio and page-type mix, full-scan
 throughput, filtered-scan timings with the page-skip breakdown, and random-access
 latency:
 
@@ -133,9 +133,10 @@ latency:
 ### Pages and differential sequences
 
 A column is cut into fixed-size **pages** of `kDefaultPageSize = 65536` rows
-(`ac_types.h`). The page size is deliberately small: it keeps the memory footprint
-and cache pressure low, and it bounds every page's offset index to at most 2 bytes
-in the common case (2¹⁶ values). Pages are grouped into **differential sequences**:
+(`ac_types.h`). The page size is kept small on purpose: it holds down the memory
+footprint and cache pressure, and it bounds every page's offset index to at most 2
+bytes in the common case (2^16 values). Pages are grouped into **differential
+sequences**:
 
 ```
  page:   0        1        2        3        4        5        6        7
@@ -146,70 +147,71 @@ in the common case (2¹⁶ values). Pages are grouped into **differential sequen
 ```
 
 A sequence starts with a self-contained page and continues with pages that store
-only new values. A sequence is a natural split point for parallelism, and — as in
-Parquet row groups — the file can be cut there.
+only new values. Sequences are a natural split point for parallelism, and the file
+can be cut there, much like a Parquet row group.
 
 ### The three page types
 
 | | `isLocal` | `isRaw` | Dictionary holds | Offsets index into |
 |---|---|---|---|---|
 | **Local** | `true` | `false` | all distinct values in the page, sorted | its own dictionary |
-| **Differential** | `false` | `false` | only values *new* to the sequence, sorted | the **cumulative** dictionary (local page's dict + every diff dict so far) |
-| **Raw** | `true` | `false`→`true` | — | — (values stored verbatim in `rawValues`) |
+| **Differential** | `false` | `false` | only values new to the sequence, sorted | the **cumulative** dictionary (local page's dict plus every diff dict so far) |
+| **Raw** | `true` | `true` | nothing | nothing (values stored verbatim in `rawValues`) |
 
-**Raw pages** implement the paper's 80 % distinct-value threshold (§3): if more than
+**Raw pages** implement the paper's 80% distinct-value threshold (§3). If more than
 `kDistinctRatioDisable = 0.80` of a page's values are distinct, dictionary encoding
-cannot pay for itself, so the page stores its values as-is with no dictionary and no
-offsets. A raw page **breaks** the current sequence — the next page starts a new one.
-It is flagged `isLocal = true` precisely because every consumer treats it as a
+cannot pay for itself, so the page stores its values as they are, with no dictionary
+and no offsets. A raw page also breaks the current sequence, so the next page starts
+a new one. It carries `isLocal = true` because every consumer needs to treat it as a
 sequence boundary.
 
-Offsets are stored at variable width — 1, 2 or 4 bytes — chosen per page from the
+Offsets are stored at variable width (1, 2 or 4 bytes), chosen per page from the
 cardinality it has to address (`width_for_cardinality` in `ac_utils.cpp`). This is
-the quantity the cost function is fighting over: a differential dictionary keeps
-growing, and once it crosses 256 or 65 536 entries, *every row in every subsequent
-page of that sequence* pays an extra byte.
+the quantity the cost function is fighting over. A differential dictionary keeps
+growing, and once it crosses 256 or 65,536 entries, every row in every later page of
+that sequence pays an extra byte.
 
 Each page also carries two pairs of min/max statistics:
 
-- `pageMin` / `pageMax` — over **all rows** of the page. A classic zone map.
-- `diffMin` / `diffMax` — over the **newly added values only** on a differential
-  page. This is the paper's *page omittance* refinement (§3.2.4): it is a much
-  tighter filter than the zone map when you are only asking "was this value
-  introduced here?", so it eliminates far more dictionary searches.
+- `pageMin` / `pageMax` cover all rows of the page. This is a classic zone map.
+- `diffMin` / `diffMax` cover only the newly added values on a differential page.
+  This is the paper's *page omittance* refinement (§3.2.4). It is a much tighter
+  filter than the zone map when the question is only "was this value introduced
+  here?", so it eliminates far more dictionary searches.
 
 ### Choosing local vs. differential
 
 `AdaptiveDictionaryEncoder::encode` (`ac_encoder.cpp`) applies four rules per page,
 in order:
 
-1. **First page of a sequence** → local. There is no prior context to be
+1. **First page of a sequence** goes local. There is no prior context to be
    differential against.
-2. **Low cross-page repetition** → local. If fewer than
-   `kMinCrossPageRepeatRatio = 10 %` of the page's rows repeat a value already in the
+2. **Low cross-page repetition** goes local. If fewer than
+   `kMinCrossPageRepeatRatio = 10%` of the page's rows repeat a value already in the
    cumulative dictionary, differential encoding buys almost nothing. Before
    committing to the reset, the encoder consults a **Bloom filter** built over the
-   dictionary that started the sequence (`ac_bloom.cpp`, 10 % false-positive rate,
-   double-hashed FNV-1a). Because the filter *over*-estimates membership, this check
-   is deliberately conservative: it avoids tearing down a healthy sequence just
-   because one page dipped below the threshold. This is the paper's §3.1 remark
+   dictionary that started the sequence (`ac_bloom.cpp`, 10% false-positive rate,
+   double-hashed FNV-1a). Because the filter over-estimates membership, this check
+   errs on the conservative side and avoids tearing down a healthy sequence just
+   because one page dipped below the threshold. This follows the paper's §3.1 remark
    about using a Bloom filter to cheaply re-check the rate of new values.
-3. **Offset width would not grow** → differential, unconditionally. If nothing gets
-   wider, differential is free savings and the cost function is not needed.
-4. **Offset width would grow** → evaluate the cost function, Equation 1 of the paper:
+3. **Offset width would not grow**, so use differential unconditionally. If nothing
+   gets wider, differential is free savings and the cost function is not needed.
+4. **Offset width would grow**, so evaluate the cost function, Equation 1 of the
+   paper:
 
    ```
    diffcount * (difOffsetSize - diffavg) - locOffsetSize - (locPageSize - difPageSize) > 0
    ```
 
-   where `diffcount` is the number of differential pages in the current sequence,
+   Here `diffcount` is the number of differential pages in the current sequence,
    `difOffsetSize` the total offset bytes if this page is differential, `diffavg` the
-   average differential-dictionary size so far, and `loc*`/`dif*` the projected page
-   sizes either way. If the expression is positive, the *predicted future* cost of
-   the wider offsets across the rest of the sequence outweighs this page's savings,
-   so the encoder starts a fresh local page.
+   average differential-dictionary size so far, and `loc*` / `dif*` the projected page
+   sizes either way. If the expression is positive, the predicted future cost of the
+   wider offsets across the rest of the sequence outweighs this page's savings, so
+   the encoder starts a fresh local page.
 
-The point of rule 4 is that the decision is not local to the current page: choosing
+Rule 4 matters because the decision is not local to the current page. Choosing
 differential now makes every later page in the sequence pay for a bigger dictionary,
 so the encoder uses the sequence's own history to predict what the next pages will
 look like.
@@ -230,66 +232,66 @@ page 0 (local)                        page 1 (differential)
                                         diffDepth:   1
 ```
 
-`Athens` and `Berlin` are stored **once** for both pages, yet page 1's offsets are
-still only one byte wide. A filtered scan for `Cairo` on page 1 can skip the
-dictionary search outright (`Cairo` < `diffMin`) and, having failed to find it in
-the cumulative dictionary, skip the offset scan entirely.
+`Athens` and `Berlin` are stored once for both pages, yet page 1's offsets are still
+only one byte wide. A filtered scan for `Cairo` on page 1 can skip the dictionary
+search outright, since `Cairo` sorts below `diffMin`, and having failed to find it in
+the cumulative dictionary it skips the offset scan too.
 
 ---
 
 ## The operators
 
-All four operate directly on the compressed representation; none of them
-materialises the column unless asked to.
+All four work directly on the compressed representation. None of them materialises
+the column unless asked to.
 
-### Full scan / decompression — `ac_decompressor.cpp` (§3.2.2)
+### Full scan / decompression, `ac_decompressor.cpp` (§3.2.2)
 
-Walks pages in order maintaining the cumulative dictionary: a local page **resets**
-it, a differential page **appends** to it, a raw page copies values straight out.
+Walks pages in order while maintaining the cumulative dictionary. A local page resets
+it, a differential page appends to it, and a raw page copies values straight out.
 Every offset then indexes the cumulative dictionary directly. The cumulative
-dictionary is a vector of `const std::string*` pointing into the pages themselves —
-the `EncodedColumn` outlives the call, so no intermediate string is ever copied and
+dictionary is a vector of `const std::string*` pointing into the pages themselves.
+The `EncodedColumn` outlives the call, so no intermediate string is ever copied and
 the only allocations are the output values.
 
-### Filtered scan — `ac_scanner.cpp` (§3.2.3, Algorithm 2)
+### Filtered scan, `ac_scanner.cpp` (§3.2.3, Algorithm 2)
 
-Equality predicate, returns matching row indices. Three layers of skipping run
-before any offset is touched:
+Equality predicate, returns matching row indices. Three layers of skipping run before
+any offset is touched:
 
-1. **Zone map** — target outside `[pageMin, pageMax]` ⇒ no row in this page can
-   match. Skip. (counted as `ZMSkip`)
-2. **Differential min/max** — on a diff page, target outside `[diffMin, diffMax]` ⇒
-   it was not introduced here, so don't even binary-search this page's dictionary.
-3. **Dictionary miss** — if the target still isn't in the cumulative dictionary, the
-   page cannot contain it. Skip. (counted as `DictSkip`)
+1. **Zone map.** If the target falls outside `[pageMin, pageMax]`, no row in this page
+   can match, so skip it. Counted as `ZMSkip`.
+2. **Differential min/max.** On a diff page, if the target falls outside
+   `[diffMin, diffMax]` it was not introduced here, so this page's dictionary is not
+   even searched.
+3. **Dictionary miss.** If the target still is not in the cumulative dictionary, the
+   page cannot contain it, so skip it. Counted as `DictSkip`.
 
 Only surviving pages get an offset scan, comparing each offset against the single
-integer the target resolved to. The scanner is the one consumer that **never rebuilds
-the cumulative dictionary** — it only tracks whether the target is in it and at which
+integer the target resolved to. The scanner is the one consumer that never rebuilds
+the cumulative dictionary. It only tracks whether the target is in it and at which
 index, which is exactly the paper's observation that a filtered scan needs one lookup
 per sequence rather than one per page. Once the target's offset is known it stays
-valid for the rest of the sequence, so subsequent diff dictionaries are skipped
-outright.
+valid for the rest of the sequence, so later diff dictionaries are skipped outright.
 
-### Random access — `ac_random_access.cpp` (§3.2.5)
+### Random access, `ac_random_access.cpp` (§3.2.5)
 
-`random_access(col, rowIndex)` returns one value in a **fixed number of page reads**,
-regardless of how long the sequence is. The mechanism is the `dictSizes` list in each
+`random_access(col, rowIndex)` returns one value in a fixed number of page reads, no
+matter how long the sequence is. The mechanism is the `dictSizes` list in each
 differential page header, which records the size of every dictionary in the sequence
 up to and including that page:
 
-1. Walk page headers to find the page holding `rowIndex` (headers only — no
-   dictionaries or offsets are read), and read the offset.
-2. Prefix-sum `dictSizes` to find which page in the sequence *owns* that offset, and
+1. Walk page headers to find the page holding `rowIndex` (headers only, so no
+   dictionaries or offsets are read) and read the offset.
+2. Prefix-sum `dictSizes` to find which page in the sequence owns that offset, and
    read only that page's dictionary.
 
-Two page reads total. Local and raw pages resolve in one. Without `dictSizes` this
+That is two page reads. Local and raw pages resolve in one. Without `dictSizes` this
 would require rebuilding the cumulative dictionary from the sequence start.
 
 `batch_random_access(col, sortedRowIndices)` (§3.2.4) is the bulk form used after a
-filtered scan: it walks pages once, maintaining the cumulative dictionary
+filtered scan. It walks pages once, maintaining the cumulative dictionary
 incrementally, and resolves every requested index that lands in the current page.
-Cost is O(pages + indices) rather than O(indices × pages).
+Cost is O(pages + indices) rather than O(indices x pages).
 
 `filtered_scan_random_access(predicateCol, target, payloadCol)` composes the two into
 the paper's "filter one column, fetch another" pattern.
@@ -298,8 +300,8 @@ the paper's "filter one column, fetch another" pattern.
 
 ## Binary file format
 
-Written by `ac_serial.cpp`. All integers little-endian; strings are a `u32` byte
-length followed by raw bytes.
+Written by `ac_serial.cpp`. All integers are little-endian, and strings are a `u32`
+byte length followed by raw bytes.
 
 ```
 FILE
@@ -341,15 +343,15 @@ PAGE
     offsets         offsetWidth bytes * offsetCount
 ```
 
-Two notes for anyone editing this: fields are positional with no per-page framing, so
-`write_column` and `read_column` must be changed together and in the same order; and
-`dictSizes` / `diffDepth` are pure redundancy that exists only to make random access
-a two-page read — the encoder is responsible for keeping them consistent.
+Two notes for anyone editing this. Fields are positional with no per-page framing, so
+`write_column` and `read_column` have to change together and in the same order. And
+`dictSizes` / `diffDepth` are pure redundancy that exists only to make random access a
+two-page read, so the encoder is responsible for keeping them consistent.
 
-**Numeric columns bypass the scheme entirely.** `is_string_column()`
-(`ac_utils.cpp`) returns false when every value parses as a number; such a column is
-stored as raw values with `dictionaryEnabled = false` and no pages. Every operator
-has a branch for this, and `bench` reports the column as skipped.
+**Numeric columns bypass the scheme entirely.** `is_string_column()` (`ac_utils.cpp`)
+returns false when every value parses as a number. Such a column is stored as raw
+values with `dictionaryEnabled = false` and no pages at all. Every operator has a
+branch for this, and `bench` reports the column as skipped.
 
 ---
 
@@ -361,8 +363,8 @@ has a branch for this, and `bench` reports the column as skipped.
 ./compress <csv-file> <col1> [col2 ...] > out.comp
 ```
 
-1-based column indices, deduplicated and sorted. Writes the container to **stdout**.
-Only the selected columns are encoded.
+Column indices are 1-based, deduplicated and sorted. The container is written to
+stdout. Only the selected columns are encoded.
 
 ### `decompress`
 
@@ -372,8 +374,8 @@ Only the selected columns are encoded.
 
 Verifies the `ACMP1` magic, decodes every stored column, checks each has exactly
 `rowCount` values, and writes them to stdout as CSV in the order they were stored.
-Note this emits *only the columns that were compressed*, so a round-trip check must
-compare against those source columns (e.g. `cut -d, -f2,3`).
+It emits only the columns that were compressed, so a round-trip check has to compare
+against those source columns (for example with `cut -d, -f2,3`).
 
 ### `bench`
 
@@ -381,17 +383,17 @@ compare against those source columns (e.g. `cut -d, -f2,3`).
 ./bench <csv_file> [--max-rows N] [--runs N] <col1> [col2 ...]
 ```
 
-- `--max-rows N` — stop reading after N rows. Needed for the very large files;
-  `run_bench.sh` caps `views_stats.csv` at 5 M rows for memory.
-- `--runs N` — timed runs per measurement (default 5, plus 1 warmup). All reported
-  timings are **medians**, measured in-memory with warm caches.
+- `--max-rows N` stops reading after N rows. This is needed for the very large files;
+  `run_bench.sh` caps `views_stats.csv` at 5M rows for memory.
+- `--runs N` sets the timed runs per measurement (default 5, plus 1 warmup). All
+  reported timings are medians, measured in memory with warm caches.
 
-Filtered-scan targets are picked automatically from the data at the ¼, ½ and ¾
+Filtered-scan targets are picked automatically from the data at the 1/4, 1/2 and 3/4
 positions of the column, so they are guaranteed to exist and to span a range of
 selectivities. Random access samples 10 row indices spread evenly across the column.
 
-There is no unit-test framework in this repo; `bench` plus a `compress | decompress`
-round-trip is how changes are validated.
+There is no unit-test framework in this repo. `bench` plus a `compress | decompress`
+round-trip is how changes get validated.
 
 ### `run_bench.sh`
 
@@ -400,11 +402,11 @@ round-trip is how changes are validated.
 ```
 
 Runs the full suite over three tables of the OpenAIRE/UDFBench dataset, chosen to
-span the cardinality spectrum: `views_stats.csv` (5 M rows, extreme repetition),
-`artifact_authors.csv` (9.9 M rows, high-cardinality long strings — closest to the
-paper's own workload), and `artifacts.csv` (3.8 M rows, mixed: unique IDs, free-text
-titles, categoricals, booleans). The script documents each column's cardinality
-character inline.
+span the cardinality spectrum: `views_stats.csv` (5M rows, extreme repetition),
+`artifact_authors.csv` (9.9M rows, high-cardinality long strings, and the closest to
+the paper's own workload), and `artifacts.csv` (3.8M rows, mixed: unique IDs,
+free-text titles, categoricals, booleans). The script documents each column's
+cardinality character inline.
 
 > **The dataset is not in this repository.** `benchmark/` is gitignored. Both
 > `run_bench.sh` and `duckdb_bench.py` expect the CSVs at
@@ -416,67 +418,68 @@ character inline.
 python3 duckdb_bench.py        # requires: pip install duckdb
 ```
 
-The baseline. Runs DuckDB 1.5.2 in-memory over the same datasets and the same filter
-targets, measuring CSV full scan, CSV→Parquet conversion (Snappy and Zstd), Parquet
-full scan, and filtered scan on both. All columns are ingested as `VARCHAR`
+The baseline. Runs DuckDB 1.5.2 in memory over the same datasets and the same filter
+targets, measuring CSV full scan, CSV to Parquet conversion (Snappy and Zstd),
+Parquet full scan, and filtered scan on both. All columns are ingested as `VARCHAR`
 (`all_varchar=true`) so the comparison against a string-only implementation is fair.
-Output is `duckdb_results.txt`.
+Output goes to `duckdb_results.txt`.
 
 ---
 
 ## Benchmark results
 
-Numbers below are from `report.tex` / `test_results.txt` / `duckdb_results.txt`.
-Caveat carried over from the report's methodology: our encoder measures **only the
-tested string columns**, while DuckDB compresses the **whole file** including
-numeric ones, so raw-size baselines differ.
+Numbers below come from `report.tex`, `test_results.txt` and `duckdb_results.txt`.
+One caveat carried over from the report's methodology: our encoder measures only the
+tested string columns, while DuckDB compresses the whole file including numeric ones,
+so the raw-size baselines differ.
 
-**Compression** — adaptive encoding wins decisively on repetitive columns and loses
-on free text:
+**Compression.** Adaptive encoding wins decisively on repetitive columns and loses on
+free text:
 
 | Column | Raw MB | Ours | DuckDB PQ/Zstd (whole file) |
 |---|---|---|---|
-| `views_stats` col 4 — project ID | 219.3 | **45.79×** | 24.49× |
-| `views_stats` col 3 — data source | 37.5 | 7.84× | 24.49× |
-| `artifacts` col 7 — access type | 40.6 | 11.26× | 3.71× |
-| `artifacts` col 3 — publisher | 46.6 | 5.39× | 3.71× |
-| `artifact_authors` col 1 — artifact ID | 435.7 | 5.47× | 14.13× |
-| `artifacts` col 2 — title (unique free text) | 313.5 | 0.96× | 3.71× |
+| `views_stats` col 4, project ID | 219.3 | **45.79x** | 24.49x |
+| `views_stats` col 3, data source | 37.5 | 7.84x | 24.49x |
+| `artifacts` col 7, access type | 40.6 | 11.26x | 3.71x |
+| `artifacts` col 3, publisher | 46.6 | 5.39x | 3.71x |
+| `artifact_authors` col 1, artifact ID | 435.7 | 5.47x | 14.13x |
+| `artifacts` col 2, title (unique free text) | 313.5 | 0.96x | 3.71x |
 
-Page mixes explain the extremes: the project-ID column is 2 local / 75 diff pages,
-while the unique title column is 58 raw pages out of 58 — every page trips the 80 %
-distinct threshold, so the "compressed" output is the raw strings plus a 4-byte
-length prefix each, i.e. slight expansion.
+The page mixes explain the extremes. The project-ID column comes out as 2 local and
+75 diff pages, while the unique title column is 58 raw pages out of 58: every page
+trips the 80% distinct threshold, so the "compressed" output is the raw strings plus
+a 4-byte length prefix each, which is slight expansion.
 
-**Filtered scan** — competitive with, and on low-cardinality columns faster than,
-DuckDB over Parquet:
+**Filtered scan.** Competitive with DuckDB over Parquet, and faster on low-cardinality
+columns:
 
 | Filter | Matched | Ours (ms) | PQ/Snappy (ms) | PQ/Zstd (ms) |
 |---|---|---|---|---|
-| `views_stats` month = `2019/05` | 24 400 | **2.11** | 3.7 | 4.1 |
-| `views_stats` month = `2023/01` | 116 640 | **3.04** | 3.9 | 4.7 |
-| `views_stats` source = `IRUS-UK` | 1 141 124 | 3.49 | 1.6 | 1.5 |
+| `views_stats` month = `2019/05` | 24,400 | **2.11** | 3.7 | 4.1 |
+| `views_stats` month = `2023/01` | 116,640 | **3.04** | 3.9 | 4.7 |
+| `views_stats` source = `IRUS-UK` | 1,141,124 | 3.49 | 1.6 | 1.5 |
 | `artifact_authors` name = `Y. G. Xie` | 50 | **9.32** | 106.1 | 107.6 |
 | `artifact_authors` last = `Shin` | 963 | **5.36** | 59.0 | 57.7 |
-| `artifacts` type = `publication` | 3 013 657 | 8.87 | 4.1 | 3.9 |
+| `artifacts` type = `publication` | 3,013,657 | 8.87 | 4.1 | 3.9 |
 
-**Full scan** — DuckDB's vectorised Parquet reader is faster at materialising whole
-columns (our decompressor peaks around 1.06 GB/s per column); the compressed format
-is optimised for skipping, not for bulk materialisation.
+**Full scan.** DuckDB's vectorised Parquet reader is faster at materialising whole
+columns; our decompressor peaks around 1.06 GB/s per column. The compressed format is
+built for skipping rather than for bulk materialisation.
 
-**Random access** — sub-microsecond point queries (`bench` reports the average at its
-0.0001 ms print resolution; `report.tex`'s table records 1.1–1.2 µs from an earlier
-build). The cost is flat across every column type and sequence length, which is the
-whole point of the `dictSizes` two-page read. DuckDB has no row-level point-query
-primitive over CSV/Parquet without a full scan or a prebuilt index, so it is not
-compared here.
+**Random access.** Sub-microsecond point queries. `bench` reports the average at its
+0.0001 ms print resolution, while `report.tex`'s table records 1.1 to 1.2 µs from an
+earlier build. The cost stays flat across every column type and sequence length,
+which is what the `dictSizes` two-page read is for. DuckDB has no row-level
+point-query primitive over CSV or Parquet without a full scan or a prebuilt index, so
+it is not compared here.
 
 **The honest trade-off**, spelled out in the report's discussion: raw pages fix the
-expansion problem on unique columns but are *opaque to the scanner* — they carry no
-dictionary, so they cannot be dict-skipped. `artifacts` col 1 went from 57-of-58
-pages skipped to scanning all 58 (≈17.6 ms), and `artifact_authors` col 3 dropped
-from 27–106 to 6–62 pages skipped of 152. Still far ahead of Parquet's 104–109 ms on
-that column, but it is a real regression against the pre-raw-page encoding.
+expansion problem on unique columns, but they are opaque to the scanner. They carry
+no dictionary, so they cannot be dict-skipped. `artifacts` col 1 went from 57 of 58
+pages skipped to scanning all 58 (about 17.6 ms), and `artifact_authors` col 3
+dropped from 27-106 to 6-62 pages skipped out of 152. That is still far ahead of
+Parquet's 104-109 ms on that column, but it is a real regression against the pre-raw-page
+encoding.
 
 ---
 
@@ -486,21 +489,21 @@ that column, but it is a real regression against the pre-raw-page encoding.
 |---|---|
 | `ac_types.h` | Shared vocabulary: `EncodedPage`, `EncodedColumn`, `DecodedColumn`, tuning constants. Included first by everything. |
 | `ac_utils.{h,cpp}` | `width_for_cardinality`, `is_numeric` / `is_string_column`, dictionary size estimation, `min_max`. |
-| `ac_csv.{h,cpp}` | CSV reading. Quoted fields and `""` escapes handled; rows normalised to the first row's width. |
+| `ac_csv.{h,cpp}` | CSV reading. Handles quoted fields and `""` escapes; rows are normalised to the first row's width. |
 | `ac_bloom.{h,cpp}` | Bloom filter (double-hashed FNV-1a) used by encoder rule 2. |
 | `ac_encoder.{h,cpp}` | **The core algorithm.** Page splitting, local/diff/raw selection, cost function, sequence bookkeeping. |
-| `ac_serial.{h,cpp}` | `EncodedColumn` ⇄ `ACMP1` bytes. |
+| `ac_serial.{h,cpp}` | `EncodedColumn` to and from `ACMP1` bytes. |
 | `ac_decompressor.{h,cpp}` | Full scan / decode. |
-| `ac_scanner.{h,cpp}` | Filtered scan + skip statistics + filtered-scan-random-access. |
+| `ac_scanner.{h,cpp}` | Filtered scan, skip statistics, filtered-scan-random-access. |
 | `ac_random_access.{h,cpp}` | Point query (two-page read) and batch point query. |
-| `main.cpp` / `main_decompress.cpp` | CLIs for `compress` / `decompress`. |
+| `main.cpp` / `main_decompress.cpp` | CLIs for `compress` and `decompress`. |
 | `bench.cpp` | Benchmark harness. |
 | `run_bench.sh` | Full suite over the three UDFBench tables. |
 | `duckdb_bench.py` | DuckDB/Parquet baseline. |
 | `report.tex` | Write-up of the evaluation. |
 | `test_results.txt`, `duckdb_results.txt` | Raw benchmark output backing the report. |
 | `adaptive_compression.pdf` | The paper. |
-| `CLAUDE.md` | Orientation notes for Claude Code, incl. cross-file invariants. |
+| `CLAUDE.md` | Orientation notes for Claude Code, including cross-file invariants. |
 
 The `Makefile` lists header dependencies explicitly rather than generating them, so a
 new `.cpp` needs three edits: the object list, the `clean` rule, and a dependency
@@ -512,53 +515,53 @@ line.
 
 | Paper section | Implemented in |
 |---|---|
-| §3.1 — selection between differential and local; Equation 1; 10 % repeat guard; 80 % distinct guard; Bloom filter | `ac_encoder.cpp` (rules 1–4), `ac_bloom.cpp` |
-| §3.2.1 — compression, Algorithm 1 | `AdaptiveDictionaryEncoder::encode` |
-| §3.2.2 — full scan / decompression | `ac_decompressor.cpp` |
-| §3.2.3 — filtered scan, Algorithm 2 | `ac_scanner.cpp` |
-| §3.2.4 — page omittance (`diffMin`/`diffMax`); batch retrieval | `ac_scanner.cpp`, `batch_random_access` in `ac_random_access.cpp` |
-| §3.2.5 — random access in a fixed number of page reads | `random_access` via `dictSizes` + `diffDepth` |
-| Figure 2 — structure of an adaptively encoded attribute | `ac_serial.cpp` layout |
+| §3.1, selection between differential and local; Equation 1; 10% repeat guard; 80% distinct guard; Bloom filter | `ac_encoder.cpp` (rules 1-4), `ac_bloom.cpp` |
+| §3.2.1, compression, Algorithm 1 | `AdaptiveDictionaryEncoder::encode` |
+| §3.2.2, full scan / decompression | `ac_decompressor.cpp` |
+| §3.2.3, filtered scan, Algorithm 2 | `ac_scanner.cpp` |
+| §3.2.4, page omittance (`diffMin`/`diffMax`), batch retrieval | `ac_scanner.cpp`, `batch_random_access` in `ac_random_access.cpp` |
+| §3.2.5, random access in a fixed number of page reads | `random_access` via `dictSizes` and `diffDepth` |
+| Figure 2, structure of an adaptively encoded attribute | `ac_serial.cpp` layout |
 
-Not implemented: the paper's Python/Dask integration, per-page secondary codecs
-(the format allows compressing the sorted dictionaries or offsets with ZLIB /
-RLE / bit-packing on top — this implementation stores them plainly), and
-partition-level parallelism across sequences.
+Not implemented: the paper's Python/Dask integration, per-page secondary codecs (the
+format allows compressing the sorted dictionaries or offsets with ZLIB, RLE or
+bit-packing on top, but this implementation stores them plainly), and partition-level
+parallelism across sequences.
 
 ---
 
 ## Limitations and design notes
 
-- **In-memory only.** The whole column is read, encoded and queried in RAM; there is
-  no buffer pool, mmap or I/O layer. Page-skip counts are therefore a proxy for the
-  I/O the format *would* save, not measured I/O.
+- **In-memory only.** The whole column is read, encoded and queried in RAM. There is
+  no buffer pool, mmap or I/O layer, so page-skip counts are a proxy for the I/O the
+  format would save rather than measured I/O.
 - **Equality predicates only.** `filtered_scan` tests `value == target`. Range
-  predicates would work naturally with the sorted dictionaries and zone maps but are
+  predicates would fit naturally with the sorted dictionaries and zone maps but are
   not implemented.
 - **CSV input is headerless and line-based.** The first line is data, not a header,
-  and quoted fields containing embedded newlines are not supported (`read_csv`
-  splits on `\n` before parsing quotes).
+  and quoted fields containing embedded newlines are not supported, since `read_csv`
+  splits on `\n` before parsing quotes.
 - **4-byte length prefix per string** in the serialised format. On unique columns
-  stored as raw pages, this prefix *is* the residual 0.92–0.96× expansion.
-- **Raw pages cannot be dict-skipped** — see the trade-off note in the results.
-- **Row counts are `uint32_t`** throughout, capping a column at ~4.29 B rows.
-- `bench` encodes each column once as a probe to detect numeric columns and again
-  for timing, so its wall-clock is roughly double the reported compression time.
+  stored as raw pages, this prefix is the residual 0.92-0.96x expansion.
+- **Raw pages cannot be dict-skipped.** See the trade-off note in the results.
+- **Row counts are `uint32_t`** throughout, capping a column at roughly 4.29B rows.
+- `bench` encodes each column once as a probe to detect numeric columns and again for
+  timing, so its wall-clock is roughly double the reported compression time.
 
 ---
 
 ## Tuning
 
-The knobs are all in `ac_types.h`:
+The knobs all live in `ac_types.h`:
 
 | Constant | Default | Effect |
 |---|---|---|
-| `kDefaultPageSize` | 65536 | Rows per page. Larger pages compress better but skip worse and cost more per random access; keeping it at 2¹⁶ bounds most offsets to 2 bytes. |
-| `kDistinctRatioDisable` | 0.80 | Distinct-value ratio above which a page is stored raw. Lowering it makes more pages raw (less expansion on unique data, less skipping); raising it does the reverse. |
+| `kDefaultPageSize` | 65536 | Rows per page. Larger pages compress better but skip worse and cost more per random access. Keeping it at 2^16 bounds most offsets to 2 bytes. |
+| `kDistinctRatioDisable` | 0.80 | Distinct-value ratio above which a page is stored raw. Lowering it makes more pages raw, which means less expansion on unique data but less skipping. Raising it does the reverse. |
 | `kMinCrossPageRepeatRatio` | 0.10 | Cross-page repetition below which the encoder prefers a fresh local page. |
 
-The Bloom filter's false-positive rate (10 %, `ac_bloom.h`) is a fourth knob: it
-biases rule 2 toward *keeping* sequences alive.
+The Bloom filter's false-positive rate (10%, in `ac_bloom.h`) is a fourth knob. It
+biases rule 2 toward keeping sequences alive.
 
 ---
 
@@ -567,5 +570,4 @@ biases rule 2 toward *keeping* sequences alive.
 1. Y. Foufoulas, L. Sidirourgos, E. Stamatogiannakis, Y. Ioannidis. *Adaptive
    Compression for Fast Scans on String Columns.* SIGMOD '21.
    <https://doi.org/10.1145/3448016.3452798>
-2. Reference implementation by the authors: <https://github.com/madgik/arcade>
-3. UDFBench / OpenAIRE dataset — the benchmark corpus used here.
+2. UDFBench / OpenAIRE dataset, the benchmark corpus used here.
