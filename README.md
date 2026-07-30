@@ -5,13 +5,13 @@ A from-scratch C++14 implementation of the adaptive dictionary compression schem
 > Yannis Foufoulas, Lefteris Sidirourgos, Eleftherios Stamatogiannakis, Yannis Ioannidis.
 > **"Adaptive Compression for Fast Scans on String Columns."** SIGMOD '21, pp. 554-562.
 > [doi:10.1145/3448016.3452798](https://doi.org/10.1145/3448016.3452798)
-> (a copy is included in this repo as `adaptive_compression.pdf`)
+> (a copy is included in this repo as `docs/adaptive_compression.pdf`)
 
 The repository contains the compressor, the decompressor, the three query
 operators the paper defines over the compressed format (full scan, filtered scan,
 random access), a benchmark harness, a DuckDB/Parquet baseline for comparison, and
-the write-up of the measured results (`report.tex`, with raw numbers in
-`test_results.txt` and `duckdb_results.txt`).
+the write-up of the measured results (`docs/report.tex`, with raw numbers in
+`results/test_results.txt` and `results/duckdb_results.txt`).
 
 ---
 
@@ -68,8 +68,11 @@ reading Parquet/Snappy and Parquet/Zstd.
 Requires `g++` with C++14 and `make`. No third-party dependencies.
 
 ```sh
-make            # builds ./compress, ./decompress, ./bench
+make            # builds build/compress, build/decompress, build/bench
 ```
+
+Objects and binaries all land in `build/`, which is gitignored. `make clean` removes
+the directory.
 
 Create a small headerless CSV to play with:
 
@@ -86,8 +89,8 @@ with open('sample.csv','w') as f:
 Compress columns 2 and 3 (indices are **1-based**), then decompress them back:
 
 ```sh
-./compress sample.csv 2 3 > sample.comp
-./decompress sample.comp > out.csv
+./build/compress sample.csv 2 3 > sample.comp
+./build/decompress sample.comp > out.csv
 
 # verify the round-trip
 cut -d, -f2,3 sample.csv > expected.csv
@@ -97,7 +100,7 @@ cmp expected.csv out.csv && echo "ROUND-TRIP OK"
 Measure it:
 
 ```sh
-./bench sample.csv --runs 3 2 3
+./build/bench sample.csv --runs 3 2 3
 ```
 
 For each column this prints the compression ratio and page-type mix, full-scan
@@ -133,7 +136,7 @@ latency:
 ### Pages and differential sequences
 
 A column is cut into fixed-size **pages** of `kDefaultPageSize = 65536` rows
-(`ac_types.h`). The page size is kept small on purpose: it holds down the memory
+(`src/ac_types.h`). The page size is kept small on purpose: it holds down the memory
 footprint and cache pressure, and it bounds every page's offset index to at most 2
 bytes in the common case (2^16 values). Pages are grouped into **differential
 sequences**:
@@ -166,7 +169,7 @@ a new one. It carries `isLocal = true` because every consumer needs to treat it 
 sequence boundary.
 
 Offsets are stored at variable width (1, 2 or 4 bytes), chosen per page from the
-cardinality it has to address (`width_for_cardinality` in `ac_utils.cpp`). This is
+cardinality it has to address (`width_for_cardinality` in `src/ac_utils.cpp`). This is
 the quantity the cost function is fighting over. A differential dictionary keeps
 growing, and once it crosses 256 or 65,536 entries, every row in every later page of
 that sequence pays an extra byte.
@@ -181,7 +184,7 @@ Each page also carries two pairs of min/max statistics:
 
 ### Choosing local vs. differential
 
-`AdaptiveDictionaryEncoder::encode` (`ac_encoder.cpp`) applies four rules per page,
+`AdaptiveDictionaryEncoder::encode` (`src/ac_encoder.cpp`) applies four rules per page,
 in order:
 
 1. **First page of a sequence** goes local. There is no prior context to be
@@ -190,7 +193,7 @@ in order:
    `kMinCrossPageRepeatRatio = 10%` of the page's rows repeat a value already in the
    cumulative dictionary, differential encoding buys almost nothing. Before
    committing to the reset, the encoder consults a **Bloom filter** built over the
-   dictionary that started the sequence (`ac_bloom.cpp`, 10% false-positive rate,
+   dictionary that started the sequence (`src/ac_bloom.cpp`, 10% false-positive rate,
    double-hashed FNV-1a). Because the filter over-estimates membership, this check
    errs on the conservative side and avoids tearing down a healthy sequence just
    because one page dipped below the threshold. This follows the paper's §3.1 remark
@@ -244,7 +247,7 @@ the cumulative dictionary it skips the offset scan too.
 All four work directly on the compressed representation. None of them materialises
 the column unless asked to.
 
-### Full scan / decompression, `ac_decompressor.cpp` (§3.2.2)
+### Full scan / decompression, `src/ac_decompressor.cpp` (§3.2.2)
 
 Walks pages in order while maintaining the cumulative dictionary. A local page resets
 it, a differential page appends to it, and a raw page copies values straight out.
@@ -253,7 +256,7 @@ dictionary is a vector of `const std::string*` pointing into the pages themselve
 The `EncodedColumn` outlives the call, so no intermediate string is ever copied and
 the only allocations are the output values.
 
-### Filtered scan, `ac_scanner.cpp` (§3.2.3, Algorithm 2)
+### Filtered scan, `src/ac_scanner.cpp` (§3.2.3, Algorithm 2)
 
 Equality predicate, returns matching row indices. Three layers of skipping run before
 any offset is touched:
@@ -273,7 +276,7 @@ index, which is exactly the paper's observation that a filtered scan needs one l
 per sequence rather than one per page. Once the target's offset is known it stays
 valid for the rest of the sequence, so later diff dictionaries are skipped outright.
 
-### Random access, `ac_random_access.cpp` (§3.2.5)
+### Random access, `src/ac_random_access.cpp` (§3.2.5)
 
 `random_access(col, rowIndex)` returns one value in a fixed number of page reads, no
 matter how long the sequence is. The mechanism is the `dictSizes` list in each
@@ -300,7 +303,7 @@ the paper's "filter one column, fetch another" pattern.
 
 ## Binary file format
 
-Written by `ac_serial.cpp`. All integers are little-endian, and strings are a `u32`
+Written by `src/ac_serial.cpp`. All integers are little-endian, and strings are a `u32`
 byte length followed by raw bytes.
 
 ```
@@ -348,7 +351,7 @@ Two notes for anyone editing this. Fields are positional with no per-page framin
 `dictSizes` / `diffDepth` are pure redundancy that exists only to make random access a
 two-page read, so the encoder is responsible for keeping them consistent.
 
-**Numeric columns bypass the scheme entirely.** `is_string_column()` (`ac_utils.cpp`)
+**Numeric columns bypass the scheme entirely.** `is_string_column()` (`src/ac_utils.cpp`)
 returns false when every value parses as a number. Such a column is stored as raw
 values with `dictionaryEnabled = false` and no pages at all. Every operator has a
 branch for this, and `bench` reports the column as skipped.
@@ -360,7 +363,7 @@ branch for this, and `bench` reports the column as skipped.
 ### `compress`
 
 ```
-./compress <csv-file> <col1> [col2 ...] > out.comp
+./build/compress <csv-file> <col1> [col2 ...] > out.comp
 ```
 
 Column indices are 1-based, deduplicated and sorted. The container is written to
@@ -369,7 +372,7 @@ stdout. Only the selected columns are encoded.
 ### `decompress`
 
 ```
-./decompress <file.comp>
+./build/decompress <file.comp>
 ```
 
 Verifies the `ACMP1` magic, decodes every stored column, checks each has exactly
@@ -380,11 +383,11 @@ against those source columns (for example with `cut -d, -f2,3`).
 ### `bench`
 
 ```
-./bench <csv_file> [--max-rows N] [--runs N] <col1> [col2 ...]
+./build/bench <csv_file> [--max-rows N] [--runs N] <col1> [col2 ...]
 ```
 
 - `--max-rows N` stops reading after N rows. This is needed for the very large files;
-  `run_bench.sh` caps `views_stats.csv` at 5M rows for memory.
+  `bench/run_bench.sh` caps `views_stats.csv` at 5M rows for memory.
 - `--runs N` sets the timed runs per measurement (default 5, plus 1 warmup). All
   reported timings are medians, measured in memory with warm caches.
 
@@ -395,10 +398,10 @@ selectivities. Random access samples 10 row indices spread evenly across the col
 There is no unit-test framework in this repo. `bench` plus a `compress | decompress`
 round-trip is how changes get validated.
 
-### `run_bench.sh`
+### `bench/run_bench.sh`
 
 ```
-./run_bench.sh [--runs N] | tee test_results.txt
+bench/run_bench.sh [--runs N] | tee results/test_results.txt
 ```
 
 Runs the full suite over three tables of the OpenAIRE/UDFBench dataset, chosen to
@@ -408,27 +411,30 @@ the paper's own workload), and `artifacts.csv` (3.8M rows, mixed: unique IDs,
 free-text titles, categoricals, booleans). The script documents each column's
 cardinality character inline.
 
-> **The dataset is not in this repository.** `benchmark/` is gitignored. Both
-> `run_bench.sh` and `duckdb_bench.py` expect the CSVs at
-> `benchmark/udfbench-dataset/dataset/csvs/large/`.
+Both scripts resolve their paths from the repo root, so they run from any directory.
 
-### `duckdb_bench.py`
+> **The dataset is not in this repository.** `benchmark/` is gitignored. Both
+> scripts expect the CSVs at `benchmark/udfbench-dataset/dataset/csvs/large/`,
+> relative to the repo root.
+
+### `bench/duckdb_bench.py`
 
 ```
-python3 duckdb_bench.py        # requires: pip install duckdb
+python3 bench/duckdb_bench.py        # requires: pip install duckdb
 ```
 
 The baseline. Runs DuckDB 1.5.2 in memory over the same datasets and the same filter
 targets, measuring CSV full scan, CSV to Parquet conversion (Snappy and Zstd),
 Parquet full scan, and filtered scan on both. All columns are ingested as `VARCHAR`
 (`all_varchar=true`) so the comparison against a string-only implementation is fair.
-Output goes to `duckdb_results.txt`.
+Output goes to `results/duckdb_results.txt`.
 
 ---
 
 ## Benchmark results
 
-Numbers below come from `report.tex`, `test_results.txt` and `duckdb_results.txt`.
+Numbers below come from `docs/report.tex`, `results/test_results.txt` and
+`results/duckdb_results.txt`.
 One caveat carried over from the report's methodology: our encoder measures only the
 tested string columns, while DuckDB compresses the whole file including numeric ones,
 so the raw-size baselines differ.
@@ -467,7 +473,7 @@ columns; our decompressor peaks around 1.06 GB/s per column. The compressed form
 built for skipping rather than for bulk materialisation.
 
 **Random access.** Sub-microsecond point queries. `bench` reports the average at its
-0.0001 ms print resolution, while `report.tex`'s table records 1.1 to 1.2 µs from an
+0.0001 ms print resolution, while `docs/report.tex`'s table records 1.1 to 1.2 µs from an
 earlier build. The cost stays flat across every column type and sequence length,
 which is what the `dictSizes` two-page read is for. DuckDB has no row-level
 point-query primitive over CSV or Parquet without a full scan or a prebuilt index, so
@@ -485,6 +491,22 @@ encoding.
 
 ## Repository layout
 
+```
+.
+├── Makefile              build/ is the only output directory
+├── README.md
+├── src/                  the library: everything under namespace ac
+├── tools/                the three command-line entry points
+├── bench/                benchmark drivers
+├── results/              recorded benchmark output
+├── docs/                 the paper and the write-up
+├── build/                objects and binaries (gitignored)
+└── benchmark/            the UDFBench dataset (gitignored, not shipped)
+```
+
+**`src/`**, the library. Headers sit next to their sources; `-Isrc` is the only
+include path.
+
 | File | Role |
 |---|---|
 | `ac_types.h` | Shared vocabulary: `EncodedPage`, `EncodedColumn`, `DecodedColumn`, tuning constants. Included first by everything. |
@@ -496,18 +518,30 @@ encoding.
 | `ac_decompressor.{h,cpp}` | Full scan / decode. |
 | `ac_scanner.{h,cpp}` | Filtered scan, skip statistics, filtered-scan-random-access. |
 | `ac_random_access.{h,cpp}` | Point query (two-page read) and batch point query. |
-| `main.cpp` / `main_decompress.cpp` | CLIs for `compress` and `decompress`. |
-| `bench.cpp` | Benchmark harness. |
-| `run_bench.sh` | Full suite over the three UDFBench tables. |
-| `duckdb_bench.py` | DuckDB/Parquet baseline. |
-| `report.tex` | Write-up of the evaluation. |
-| `test_results.txt`, `duckdb_results.txt` | Raw benchmark output backing the report. |
-| `adaptive_compression.pdf` | The paper. |
+
+**`tools/`**, the entry points. Each compiles to one binary in `build/`.
+
+| File | Builds | Role |
+|---|---|---|
+| `main.cpp` | `build/compress` | CSV in, `ACMP1` container out. |
+| `main_decompress.cpp` | `build/decompress` | Container in, CSV out. |
+| `bench.cpp` | `build/bench` | Benchmark harness. |
+
+**Everything else.**
+
+| Path | Role |
+|---|---|
+| `bench/run_bench.sh` | Full suite over the three UDFBench tables. |
+| `bench/duckdb_bench.py` | DuckDB/Parquet baseline. |
+| `results/test_results.txt`, `results/duckdb_results.txt` | Raw benchmark output backing the report. |
+| `docs/report.tex` | Write-up of the evaluation. |
+| `docs/adaptive_compression.pdf` | The paper. |
 | `CLAUDE.md` | Orientation notes for Claude Code, including cross-file invariants. |
 
 The `Makefile` lists header dependencies explicitly rather than generating them, so a
-new `.cpp` needs three edits: the object list, the `clean` rule, and a dependency
-line.
+new module in `src/` needs three edits: the object list (`CORE_OBJS` or
+`QUERY_OBJS`), the binary that links it, and a dependency line. New files under
+`tools/` are picked up by the existing pattern rule but need their own link target.
 
 ---
 
@@ -515,13 +549,13 @@ line.
 
 | Paper section | Implemented in |
 |---|---|
-| §3.1, selection between differential and local; Equation 1; 10% repeat guard; 80% distinct guard; Bloom filter | `ac_encoder.cpp` (rules 1-4), `ac_bloom.cpp` |
+| §3.1, selection between differential and local; Equation 1; 10% repeat guard; 80% distinct guard; Bloom filter | `src/ac_encoder.cpp` (rules 1-4), `src/ac_bloom.cpp` |
 | §3.2.1, compression, Algorithm 1 | `AdaptiveDictionaryEncoder::encode` |
-| §3.2.2, full scan / decompression | `ac_decompressor.cpp` |
-| §3.2.3, filtered scan, Algorithm 2 | `ac_scanner.cpp` |
-| §3.2.4, page omittance (`diffMin`/`diffMax`), batch retrieval | `ac_scanner.cpp`, `batch_random_access` in `ac_random_access.cpp` |
+| §3.2.2, full scan / decompression | `src/ac_decompressor.cpp` |
+| §3.2.3, filtered scan, Algorithm 2 | `src/ac_scanner.cpp` |
+| §3.2.4, page omittance (`diffMin`/`diffMax`), batch retrieval | `src/ac_scanner.cpp`, `batch_random_access` in `src/ac_random_access.cpp` |
 | §3.2.5, random access in a fixed number of page reads | `random_access` via `dictSizes` and `diffDepth` |
-| Figure 2, structure of an adaptively encoded attribute | `ac_serial.cpp` layout |
+| Figure 2, structure of an adaptively encoded attribute | `src/ac_serial.cpp` layout |
 
 Not implemented: the paper's Python/Dask integration, per-page secondary codecs (the
 format allows compressing the sorted dictionaries or offsets with ZLIB, RLE or
@@ -552,7 +586,7 @@ parallelism across sequences.
 
 ## Tuning
 
-The knobs all live in `ac_types.h`:
+The knobs all live in `src/ac_types.h`:
 
 | Constant | Default | Effect |
 |---|---|---|
@@ -560,7 +594,7 @@ The knobs all live in `ac_types.h`:
 | `kDistinctRatioDisable` | 0.80 | Distinct-value ratio above which a page is stored raw. Lowering it makes more pages raw, which means less expansion on unique data but less skipping. Raising it does the reverse. |
 | `kMinCrossPageRepeatRatio` | 0.10 | Cross-page repetition below which the encoder prefers a fresh local page. |
 
-The Bloom filter's false-positive rate (10%, in `ac_bloom.h`) is a fourth knob. It
+The Bloom filter's false-positive rate (10%, in `src/ac_bloom.h`) is a fourth knob. It
 biases rule 2 toward keeping sequences alive.
 
 ---

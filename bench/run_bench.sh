@@ -2,16 +2,19 @@
 # Runs the full benchmark suite across all three test files.
 #
 # Usage:
-#   ./run_bench.sh              -- runs all three files
-#   ./run_bench.sh --runs 3     -- override number of timed runs (default 5)
+#   bench/run_bench.sh              -- runs all three files
+#   bench/run_bench.sh --runs 3     -- override number of timed runs (default 5)
 #
+# Paths are resolved from the repo root, so the script runs from any directory.
 # Output is written to stdout. Redirect to save:
-#   ./run_bench.sh | tee results.txt
+#   bench/run_bench.sh | tee results/test_results.txt
 
 set -e
 
-BENCH=./bench
-LARGE=benchmark/udfbench-dataset/dataset/csvs/large
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+BENCH="$ROOT/build/bench"
+LARGE="$ROOT/benchmark/udfbench-dataset/dataset/csvs/large"
 EXTRA_ARGS=""
 
 # Pass --runs N through if provided.

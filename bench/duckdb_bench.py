@@ -1,5 +1,5 @@
 """
-DuckDB benchmark on the same udfbench datasets used by bench.cpp.
+DuckDB benchmark on the same udfbench datasets used by tools/bench.cpp.
 
 Operations timed (5 runs, median reported):
   - CSV full scan       : SELECT all targeted columns, forces full read
@@ -7,7 +7,7 @@ Operations timed (5 runs, median reported):
   - Parquet full scan   : same query on Parquet file
   - Filtered scan       : SELECT COUNT(*) WHERE col = val  (CSV and Parquet)
 
-Columns and filter targets match the columns tested in test_results.txt.
+Columns and filter targets match the columns tested in results/test_results.txt.
 """
 
 import duckdb
@@ -19,13 +19,15 @@ import tempfile
 N_RUNS   = 5
 N_WARMUP = 1
 
-DATA = "benchmark/udfbench-dataset/dataset/csvs/large"
+# Resolved from the repo root so the script runs from any directory.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA = os.path.join(ROOT, "benchmark/udfbench-dataset/dataset/csvs/large")
 
 # ---------------------------------------------------------------------------
 # Each entry: (label, csv_path, max_rows, col_indices_to_scan, filter_targets)
 # col_indices: 0-based column positions (DuckDB column names are resolved at runtime
 #              to handle both "column0" for <10 cols and "column00" for >=10 cols)
-# filter_targets: list of (col_index, value) pairs matching test_results.txt
+# filter_targets: list of (col_index, value) pairs matching results/test_results.txt
 # ---------------------------------------------------------------------------
 DATASETS = [
     {
@@ -229,7 +231,7 @@ for ds in DATASETS:
           f"{t_csv_scan/t_zstd_scan if t_zstd_scan else 0:>9.2f}x")
 
     # ------------------------------------------------------------------
-    # 4. Filtered scan — same targets as test_results.txt
+    # 4. Filtered scan — same targets as results/test_results.txt
     # ------------------------------------------------------------------
     print()
     print_line()

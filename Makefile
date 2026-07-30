@@ -1,40 +1,51 @@
 CXX      = g++
-CXXFLAGS = -std=c++14 -Wall -Wextra -O2
+CXXFLAGS = -std=c++14 -Wall -Wextra -O2 -Isrc
 
-# Shared object files used by compress and decompress.
-SHARED_OBJS = ac_utils.o ac_csv.o \
-              ac_encoder.o ac_bloom.o \
-              ac_decompressor.o \
-              ac_serial.o
+BUILD    = build
 
-all: compress decompress bench
+# Library modules (src/). CORE is everything the compress/decompress path needs;
+# QUERY adds the operators only bench exercises.
+CORE_OBJS  = $(BUILD)/ac_utils.o $(BUILD)/ac_csv.o \
+             $(BUILD)/ac_encoder.o $(BUILD)/ac_bloom.o \
+             $(BUILD)/ac_decompressor.o $(BUILD)/ac_serial.o
 
-compress: $(SHARED_OBJS) main.o
+QUERY_OBJS = $(BUILD)/ac_random_access.o $(BUILD)/ac_scanner.o
+
+BINARIES   = $(BUILD)/compress $(BUILD)/decompress $(BUILD)/bench
+
+.PHONY: all clean
+all: $(BINARIES)
+
+$(BUILD)/compress:   $(CORE_OBJS) $(BUILD)/main.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-decompress: $(SHARED_OBJS) main_decompress.o
+$(BUILD)/decompress: $(CORE_OBJS) $(BUILD)/main_decompress.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-bench: ac_utils.o ac_csv.o ac_encoder.o ac_bloom.o ac_decompressor.o ac_random_access.o ac_scanner.o ac_serial.o bench.o
+$(BUILD)/bench:      $(CORE_OBJS) $(QUERY_OBJS) $(BUILD)/bench.o
 	$(CXX) $(CXXFLAGS) -o $@ $^
 
-%.o: %.cpp
+$(BUILD)/%.o: src/%.cpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
+$(BUILD)/%.o: tools/%.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
 clean:
-	rm -f $(SHARED_OBJS) ac_random_access.o ac_scanner.o \
-	      main.o main_decompress.o bench.o \
-	      compress decompress bench
+	rm -rf $(BUILD)
 
 # Explicit header dependencies so make rebuilds the right objects on header changes.
-ac_utils.o:          ac_utils.cpp          ac_utils.h                ac_types.h
-ac_csv.o:            ac_csv.cpp            ac_csv.h
-ac_encoder.o:        ac_encoder.cpp        ac_encoder.h              ac_types.h ac_utils.h ac_bloom.h
-ac_bloom.o:          ac_bloom.cpp          ac_bloom.h
-ac_decompressor.o:   ac_decompressor.cpp   ac_decompressor.h         ac_types.h
-ac_serial.o:         ac_serial.cpp         ac_serial.h               ac_types.h
-ac_random_access.o:  ac_random_access.cpp  ac_random_access.h        ac_types.h
-ac_scanner.o:        ac_scanner.cpp        ac_scanner.h              ac_types.h ac_random_access.h
-main.o:              main.cpp              ac_csv.h ac_encoder.h ac_serial.h ac_types.h
-main_decompress.o:   main_decompress.cpp   ac_decompressor.h ac_serial.h ac_types.h
-bench.o:             bench.cpp             ac_csv.h ac_encoder.h ac_decompressor.h ac_random_access.h ac_scanner.h ac_serial.h ac_types.h
+$(BUILD)/ac_utils.o:         src/ac_utils.cpp         src/ac_utils.h        src/ac_types.h
+$(BUILD)/ac_csv.o:           src/ac_csv.cpp           src/ac_csv.h
+$(BUILD)/ac_encoder.o:       src/ac_encoder.cpp       src/ac_encoder.h      src/ac_types.h src/ac_utils.h src/ac_bloom.h
+$(BUILD)/ac_bloom.o:         src/ac_bloom.cpp         src/ac_bloom.h
+$(BUILD)/ac_decompressor.o:  src/ac_decompressor.cpp  src/ac_decompressor.h src/ac_types.h
+$(BUILD)/ac_serial.o:        src/ac_serial.cpp        src/ac_serial.h       src/ac_types.h
+$(BUILD)/ac_random_access.o: src/ac_random_access.cpp src/ac_random_access.h src/ac_types.h
+$(BUILD)/ac_scanner.o:       src/ac_scanner.cpp       src/ac_scanner.h      src/ac_types.h src/ac_random_access.h
+$(BUILD)/main.o:             tools/main.cpp             src/ac_csv.h src/ac_encoder.h src/ac_serial.h src/ac_types.h
+$(BUILD)/main_decompress.o:  tools/main_decompress.cpp  src/ac_decompressor.h src/ac_serial.h src/ac_types.h
+$(BUILD)/bench.o:            tools/bench.cpp            src/ac_csv.h src/ac_encoder.h src/ac_decompressor.h src/ac_random_access.h src/ac_scanner.h src/ac_serial.h src/ac_types.h

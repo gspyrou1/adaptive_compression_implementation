@@ -1,2 +1,4 @@
 /benchmark/
+/build/
+__pycache__/
 *.o
